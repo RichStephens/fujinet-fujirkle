@@ -1,54 +1,102 @@
-PRODUCT = hello
-PLATFORMS += adam
-PLATFORMS += adam_cpm
-PLATFORMS += apple2
-PLATFORMS += atari
-PLATFORMS += c64
-PLATFORMS += coco
-PLATFORMS += msdos
-PLATFORMS += msxrom
+PRODUCT = fujirkle
+PRODUCT_UPPER = FUJIRKLE
+PLATFORMS = coco
 
-# You can run 'make <platform>' to build for a specific platform,
-# or 'make <platform>/<target>' for a platform-specific target.
-# Example shortcuts:
-#   make coco        → build for coco
-#   make apple2/disk → build the 'disk' target for apple2
+# CoCo targets:
+#   make coco        → CoCo 1/2 build
+#   make coco3       → CoCo 3 build (320x200x16, MSDOS-style layout)
+#   make coco-dist   → combined disk with loader + both CoCo binaries
 
 # SRC_DIRS may use the literal %PLATFORM% token.
 # It expands to the chosen PLATFORM plus any of its combos.
 SRC_DIRS = src src/%PLATFORM%
 
-# FUJINET_LIB can be
-# - a version number such as 4.7.6
-# - a directory which contains the libs for each platform
-# - a zip file with an archived fujinet-lib
-# - a URL to a git repo
-# - empty which will use whatever is the latest
-# - undefined, no fujinet-lib will be used
+# src/platform-specific is needed by everyone (#include "platform-specific/foo.h")
+INCLUDE_DIRS = src/platform-specific
+
+# src/include holds wrappers (stdint.h, conio.h ...) for non-cc65 toolchains.
+# cc65 ships its own real versions, so adding it globally would shadow them.
+EXTRA_INCLUDE_COCO = src/include
+
 FUJINET_LIB =
 
-# HIRESTXT_LIB can be
-# - a version number such as 0.5.0.2
-# - a directory which contains the built library
-# - a URL to a git repo
-# - empty which will use whatever is the latest
-# - undefined, no hirestxt-mod will be used
-# Only used for coco/dragon builds.
-#HIRESTXT_LIB =
+# CoCo: optimization + memory layout
+CFLAGS_EXTRA_COCO  += -fomit-frame-pointer -O2 -Wno-const
 
-# Define extra dirs ("combos") that expand with a platform.
-# Format: platform+=combo1,combo2
-PLATFORM_COMBOS = \
-  c64+=commodore \
-  atarixe+=atari \
-  msxrom+=msx \
-  msxdos+=msx \
-  adam_cpm+=adam
+ifeq ($(MAKE_COCO3),COCO3)
+  # CoCo 3: the 32K screen lives in MMU blocks 52-55, so the program can
+  # start lower and keep clear of the $8000 graphics window.
+  COCO_ORG = 1000
+  CFLAGS_EXTRA_COCO  += -DCOCO3
+  # --initial-s puts the stack at the top of RAM below the $8000 screen window.
+  LDFLAGS_EXTRA_COCO += --org=$(COCO_ORG) --limit=7E00 --initial-s=8000
+else
+  COCO_ORG = 1A00
+  LDFLAGS_EXTRA_COCO += --org=$(COCO_ORG) --limit=7B00
+endif
+
+ifeq ($(LAYOUT_DEMO),1)
+  CFLAGS_EXTRA_COCO += -DLAYOUT_DEMO
+endif
+
+# Support 'make coco3'
+coco3:
+	$(MAKE) coco MAKE_COCO3=COCO3
 
 include mekkogx/toplevel-rules.mk
 
-# If you need to add extra platform-specific steps, do it below:
-#   coco/r2r:: coco/custom-step1
-#   coco/r2r:: coco/custom-step2
-# or
-#   apple2/disk: apple2/custom-step1 apple2/custom-step2
+#################################################################
+## CUSTOM DISTRIBUTION RECIPES                                 ##
+#################################################################
+
+# "FUJIRKLE" is already 8 characters, so the per-model binaries use the
+# shortened FUJIRKL1 / FUJIRKL3 names that support/coco/loader.c expects.
+R2R_PRODUCT = r2r/coco/$(PRODUCT)
+COCO_DISK   = $(R2R_PRODUCT).dsk
+
+# Combined CoCo 1/2 + CoCo 3 disk, with a loader that auto-detects the model.
+coco-dist:
+	$(MAKE) clean
+	rm -rf build
+	$(MAKE) coco
+	mv $(R2R_PRODUCT).bin $(R2R_PRODUCT)1.bin
+
+	rm -rf build
+	$(MAKE) coco3
+	mv $(R2R_PRODUCT).bin $(R2R_PRODUCT)3.bin
+
+	cmoc -o $(R2R_PRODUCT).bin support/coco/loader.c
+
+	$(RM) $(COCO_DISK)
+	decb dskini $(COCO_DISK)
+	mkdir -p build/coco
+	echo RUNM\"$(PRODUCT_UPPER)\" > build/coco/autoexec.bas
+	decb copy -t -0 build/coco/autoexec.bas $(COCO_DISK),AUTOEXEC.BAS
+	decb copy -b -2 $(R2R_PRODUCT).bin  $(COCO_DISK),$(PRODUCT_UPPER).BIN
+	decb copy -b -2 $(R2R_PRODUCT)1.bin $(COCO_DISK),FUJIRKL1.BIN
+	decb copy -b -2 $(R2R_PRODUCT)3.bin $(COCO_DISK),FUJIRKL3.BIN
+
+# Layout mock-up disk: same auto-detecting loader, but both binaries show the
+# candidate board layouts instead of connecting to a server.
+DEMO_DISK = r2r/coco/fujirkle-demo.dsk
+
+coco-demo:
+	$(MAKE) clean
+	rm -rf build
+	$(MAKE) coco LAYOUT_DEMO=1
+	mv $(R2R_PRODUCT).bin $(R2R_PRODUCT)1.bin
+
+	rm -rf build
+	$(MAKE) coco MAKE_COCO3=COCO3 LAYOUT_DEMO=1
+	mv $(R2R_PRODUCT).bin $(R2R_PRODUCT)3.bin
+
+	cmoc -o $(R2R_PRODUCT).bin support/coco/loader.c
+
+	$(RM) $(DEMO_DISK)
+	decb dskini $(DEMO_DISK)
+	mkdir -p build/coco
+	echo RUNM\"$(PRODUCT_UPPER)\" > build/coco/autoexec.bas
+	decb copy -t -0 build/coco/autoexec.bas $(DEMO_DISK),AUTOEXEC.BAS
+	decb copy -b -2 $(R2R_PRODUCT).bin  $(DEMO_DISK),$(PRODUCT_UPPER).BIN
+	decb copy -b -2 $(R2R_PRODUCT)1.bin $(DEMO_DISK),FUJIRKL1.BIN
+	decb copy -b -2 $(R2R_PRODUCT)3.bin $(DEMO_DISK),FUJIRKL3.BIN

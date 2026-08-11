@@ -1,98 +1,94 @@
-# MekkoGX
+# Fujirkle
 
-[MekkoGX](https://github.com/fozzTexx/MekkoGX) is a cross-platform
-build template for retro and classic computers. It provides a
-collection of modular Makefiles and a top-level template project to
-simplify compiling, linking, and building disk images across multiple
-platforms.
-
-A major feature is **FujiNet-lib integration**. You can point
-`FUJINET_LIB` to a version, a directory, a zip archive, or a git
-repository, and it will be fetched if needed. Include paths and
-libraries are passed to your compiler and linker seamlessly.
-
-Another feature is **GitHub CI builds**. Push your project to GitHub
-and the CI will automatically compile for all configured
-platforms. This is particularly valuable because retro projects often
-require **many different toolchains**. Even though
-[defoogi](https://github.com/FozzTexx/defoogi) avoids the headache of
-setting up the needed toolchains, it relies on Docker — which many
-developers don’t have installed or don’t want to use.
+Fujirkle is a FujiNet-enabled game built with the MekkoGX retro build system. The current implementation targets CoCo platforms, but the project is designed so future ports can be added for Atari, Apple II, MSDOS, Coleco Adam, and other retro targets.
 
 ## Features
 
-- Cross-platform Makefile library for retro computers
-- Build a single platform on demand by running `make <platform>`,
-  without modifying the `PLATFORMS=` list in the Makefile
-- Top-level Makefile where all project-specific customization can be done
-- Support for platform-specific and compiler-specific customization hooks
-- FujiNet-lib integration for automated library fetching and linking
-- One-off customization by passing variable definitions on the `make`
-  command line, allowing developers to tweak a single build without
-  editing the Makefile
-- Post-build hooks to modify executables, disk images, or r2r (Ready 2
-  Run) outputs without changing reusable makefiles
-- GitHub CI builds for configured platforms automatically
+- FujiNet lobby support for player tables, ready state, and game joins
+- Lobby username and server endpoint persistence using FujiNet appkeys
+- Local server debug mode via appkey preferences
+- Current CoCo build includes both CoCo 1/2 and CoCo 3 binaries
 
-## Getting Started
+## Requirements
 
-### 1. Create a New Project from the Template
+- GNU Make
+- `cmoc`
+- `decb`
+- A compatible FujiNet library for the target platform (`fujinet-lib`)
 
-Click the **Use this template** button on GitHub to create a new
-repository from MekkoGX. This ensures you start with a clean history
-and all required build scaffolding.
+## Build commands
 
-### 2. Configure the Top-Level Makefile
+From the repository root:
 
-Edit the `Makefile` in your project root:
-
-- Set `PRODUCT` to your program name.
-- Specify the platforms you want to target in `PLATFORMS`.
-- Optionally set `EXTRA_INCLUDE` to include additional header directories.
-- Optionally set `FUJINET_LIB` to point to a version, directory, zip file, or repository.
-
-Example:
-
-```
-PRODUCT = hello
-PLATFORMS = coco apple2
-
-# Extra include directories for project-specific headers
-EXTRA_INCLUDE = ../my-extra-headers
-
-# FujiNet-lib can be a version number, a directory, a zip archive, or a git URL.
-FUJINET_LIB = 4.7.6
+```sh
+make clean
+make coco-dist
 ```
 
-### 3. Build
+The current CoCo-specific output is:
 
-- Build for all configured platforms:
+- `r2r/coco/fujirkle.dsk` — combined CoCo disk image
+- `r2r/coco/fujirkle1.bin` — CoCo 1/2 binary
+- `r2r/coco/fujirkle3.bin` — CoCo 3 binary
 
-```
-make
-```
+Single CoCo platform builds:
 
-- Build a specific platform:
-
-```
+```sh
 make coco
-make apple2/r2r
+make coco3
 ```
 
-### 4. Post-Build Customization
+Layout-demo builds:
 
-You can use post hooks to modify build outputs without altering reusable platform makefiles:
-
-Example (adding extra files to a CoCo disk image):
-
-```
-DISK_POSTDEPS_COCO := r2r/coco/extra.bin basic/coco/song.bas
-coco/disk-post::
-        decb copy -b -2 r2r/coco/extra.bin "$(DISK),EXTRA.BIN"
-        decb copy -t -0 basic/coco/song.bas "$(DISK),SONG.BAS"
+```sh
+make coco-demo
+make coco3-demo
 ```
 
-> Note: Extra dependencies do **not** automatically get added to the
-  output. You are responsible for handling the files appropriately for
-  your platform. FujiNet-lib includes and libraries are automatically
-  passed to the compiler/linker if configured.
+## Running the game
+
+Boot the generated disk image on the appropriate CoCo system. The current combined disk image contains an auto-detecting loader that chooses the correct CoCo binary at boot.
+
+## Fujinet behavior
+
+- Default server endpoint: `https://fujirkle.carr-designs.com/`
+- Lobby server and username data are stored using FujiNet appkeys
+- Lobby support uses the registered FujiNet lobby app key for table selection
+- If the debug appkey flag is `0xFF`, the client uses `http://127.0.0.1:8080/` for local server testing
+
+## Local development
+
+The local development endpoint is controlled by preferences stored in FujiNet appkeys. The client switches to the local server when a special debug flag is set in prefs.
+
+A local server can be started from the related server repository with:
+
+```sh
+cd ~/servers/fujinet-game-system/fujirkle/server
+go run .
+```
+
+## Future ports
+
+This repository is currently set up for CoCo, but the underlying MekkoGX build system supports adding new platforms without changing the game’s core logic. Planned future ports may include:
+
+- Atari
+- Apple II
+- MSDOS
+- Coleco Adam
+
+## Server / Api details
+
+## Endianness
+The server defaults to little-endian values for 16 bit values. To request big-endian from the server, define `QUERY_SUFFIX` as follows in `src/[platform]/vars.h`:
+
+```c
+#define QUERY_SUFFIX "&be=1"
+```
+
+Please visit the server page for more information:
+
+https://github.com/FujiNetWIFI/servers/tree/main/fujinet-game-system/fujirkle/server#readme
+
+## License
+
+This project is licensed under GPL v3.

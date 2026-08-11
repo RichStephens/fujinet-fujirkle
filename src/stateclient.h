@@ -1,0 +1,22 @@
+#ifndef STAECLIENT_H
+#define STAECLIENT_H
+#include <stdbool.h>
+#include <stdint.h>
+
+#define API_CALL_ERROR (0)
+#define API_CALL_SUCCESS (1)
+#define API_CALL_PENDING (2)
+
+#define STATE_UPDATE_ERROR (0)
+#define STATE_UPDATE_CHANGE (1)
+#define STATE_UPDATE_NOCHANGE (2)
+
+void updateState(bool isTables);
+uint8_t getStateFromServer();
+void apiCallForAll(char* path );
+uint8_t apiCall(char *path );
+void sendMove(char* move);
+
+extern int16_t lastReadLen;
+
+#endif /* STAECLIENT_H */
