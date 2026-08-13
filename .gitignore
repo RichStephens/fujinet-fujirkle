@@ -17,3 +17,6 @@ r2r/
 *.orig
 *.rej
 mekkogx/__pycache__/
+
+# host test harness binary
+support/host/fujirkle-host

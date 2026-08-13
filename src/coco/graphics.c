@@ -119,7 +119,7 @@ static const unsigned char diceChars[] = {
     0x41,0x40,0x42, 0x7D,0x7E,0x7F, 0x43,0x40,0x44,
 
     /* 18 - "Roll" button with no counter. Faces 14-16 carry a rolls-remaining
-       mark in the bottom centre, which fujirkle has no use for. */
+       mark in the bottom center, which fujirkle has no use for. */
     0x41,0x40,0x42, 0x2C,0x2D,0x2E, 0x43,0x40,0x44,
 };
 
@@ -329,6 +329,25 @@ void drawBox(unsigned char x, unsigned char y, unsigned char w, unsigned char h)
     hires_putc(x+w+1, y+h+1, PAL_NORMAL, 0x5A);
 }
 
+// 0x5B and 0x58 are the top and bottom tees - see the decoded glyph table in
+// the notes. The verticals are the same 0x7C the box sides use.
+void drawBoxDivider(unsigned char x, unsigned char y, unsigned char h)
+{
+    unsigned char i;
+
+    hires_putc(x, y, PAL_NORMAL, 0x5B);
+    for (i = 0; i < h; i++)
+        hires_putc(x, y + 1 + i, PAL_NORMAL, 0x7C);
+    hires_putc(x, y + h + 1, PAL_NORMAL, 0x58);
+}
+
+// CoCo 3 has room to space its tiles apart, so its major split needs no extra
+// weight - defer to the cell-aligned divider.
+void drawBoxDividerWide(unsigned char x, unsigned char y, unsigned char h)
+{
+    drawBoxDivider(x, y, h);
+}
+
 void drawDie(unsigned char x, unsigned char y, unsigned char s, bool isSelected, bool isHighlighted)
 {
     const unsigned char *src;
@@ -452,23 +471,8 @@ void setHighlight(int8_t player, bool isThisPlayer, uint8_t flash)
 
 static const int8_t  curDX[16] = { -1,0,1,2,3,  -1,0,1,2,3,  -1,-1,-1,  3,3,3 };
 static const unsigned char curDY[16] = { 0,0,0,0,0,   4,4,4,4,4,   1, 2, 3,  1,2,3 };
-static unsigned char cursorSave[16][32];
 static unsigned char cursorX;
 static bool cursorActive = false;
-
-// Both helpers assume task 1 is already mapped in.
-static void cell_io(unsigned char cx, unsigned char cy, unsigned char *buf, bool save)
-{
-    unsigned char *pos = (unsigned char *)SCREEN + (uint16_t)cy * 1280 + (uint16_t)cx * 4;
-    unsigned char r, j;
-    for (r = 0; r < 8; r++) {
-        for (j = 0; j < 4; j++) {
-            if (save) *buf++ = pos[j];
-            else      pos[j] = *buf++;
-        }
-        pos += 160;
-    }
-}
 
 static void set_pixel(uint16_t px, uint16_t py, unsigned char c)
 {
@@ -504,14 +508,13 @@ static void draw_cursor_frame(unsigned char x)
     for (p = T;     p <= B;     p++) set_pixel(R - 1, p, CKR(R - 1, p));
 }
 
+// The frame only ever covers padding, so erasing it is a blank, not a restore.
+// Saving and restoring those cells resurrected stale dice onto a cleared strip.
 void drawDiceCursor(unsigned char x)
 {
-    unsigned char i;
     if (cursorActive) hideDiceCursor(cursorX);
     cursorX = x;
     BEGIN_GFX
-    for (i = 0; i < 16; i++)
-        cell_io(x + curDX[i], DICE_CURSOR_TOP + curDY[i], cursorSave[i], true);
     draw_cursor_frame(x);
     END_GFX
     cursorActive = true;
@@ -519,16 +522,19 @@ void drawDiceCursor(unsigned char x)
 
 void hideDiceCursor(unsigned char x)
 {
-    unsigned char i, cx, cy;
+    unsigned char i;
     (void)x;
     if (!cursorActive) return;
-    BEGIN_GFX
-    for (i = 0; i < 16; i++) {
-        cx = cursorX + curDX[i];
-        cy = DICE_CURSOR_TOP + curDY[i];
-        cell_io(cx, cy, cursorSave[i], false);
-    }
-    END_GFX
+
+    for (i = 0; i < 16; i++)
+        hires_Mask(cursorX + curDX[i], DICE_CURSOR_TOP + curDY[i], 1, 1, BG_FILL);
+
+    cursorActive = false;
+}
+
+// Drop the saved cells rather than let the next draw paint them back.
+void cancelDiceCursor()
+{
     cursorActive = false;
 }
 
@@ -734,9 +740,8 @@ void resetScreen(bool forBorderScreen) {
   }
 }
 
-// Dice sit on a pixel grid of their own: y*8, with none of the OFFSET_Y that
-// text and drawSpace use. Anything that erases a die must go through this or it
-// clears a band 4 pixels too high and leaves a sliver of the old die behind.
+// Dice sit on their own pixel grid: y*8, with none of the OFFSET_Y text uses.
+// Erasing a die any other way clears 4px too high and leaves a sliver.
 static unsigned char diePixelY(unsigned char y) {
   y *= 8;
 
@@ -804,9 +809,8 @@ void drawSpace(unsigned char x, unsigned char y, unsigned char w) {
   hires_Mask(x,y==HEIGHT-3 ? 162 : y*8-OFFSET_Y,w,8,0);
 }
 
-// A die is 24 pixels tall from diePixelY, which is 4 pixels below where three
-// drawSpace rows would start - blanking those instead left the die's bottom
-// edge on screen.
+// 24px from diePixelY. Three drawSpace rows start 4px higher and leave the
+// die's bottom edge behind.
 void drawDieSpace(unsigned char x, unsigned char y) {
   hires_Mask(x,diePixelY(y),3,24,0);
 }
@@ -878,15 +882,41 @@ void drawBox(unsigned char x, unsigned char y, unsigned char w, unsigned char h)
   hires_putc(x+w+1,y+7,box_color, 0x3e);
 }
 
-// Bottom pixel row of the cursor frame. The die at DICE_Y=HEIGHT-5 occupies
-// pixels 152-175, and the frame sits 2px below it. Was 190 when the dice were a
-// row lower; move both together or the frame detaches from the dice.
-#define DICE_CURSOR_BASE 177
+// Pixel columns of the cell the wall fills - on PMODE 4 one byte is the eight
+// pixels, so the mask sets the width directly (0x3C matches the box sides).
+//
+// Balanced against letter ink, not cells: letters are 6px left aligned in an
+// 8px cell, so centering on cell boundaries reads as left of center. Equal 2px
+// gaps around both words need ROLL on cell 1, this wall at px 16-21, BANK on
+// cell 3, and the major wall across px 32-45 taking up the slack.
+#define DIVIDER_MASK 0xFC
 
+// One rectangle between the two rules, so the junctions read as tees without
+// this font having a tee glyph, and nothing overhangs the box.
+void drawBoxDivider(unsigned char x, unsigned char y, unsigned char h) {
+  // Starts just under the 2px top rule and stops just above the bottom one
+  hires_Mask(x, y*8-OFFSET_Y+1+5, 1, (h+1)*8-3, DIVIDER_MASK & box_color);
+}
+
+// Straddles the cell boundary, so it lands half a cell left of where
+// The major wall: a full cell plus 6px, ink px 32-45 for a call on cell 5.
+void drawBoxDividerWide(unsigned char x, unsigned char y, unsigned char h) {
+  static unsigned char ey, eh;
+
+  ey = y*8-OFFSET_Y+1+5;
+  eh = (h+1)*8-3;
+
+  hires_Mask(x-1, ey, 1, eh, 0xFF & box_color);
+  hires_Mask(x,   ey, 1, eh, 0xFC & box_color);
+}
+
+// Bottom pixel row of the cursor frame - always the die's top pixel plus 25.
+// Move it whenever DICE_Y moves or the frame detaches from the dice.
+#define DICE_CURSOR_BASE 161
+
+// fujitzee nudged x past its roll button when x was ROLL_X-1. ROLL_X is 8 here,
+// so that fired on the first die's column. Our buttons are not on the dice row.
 void drawDiceCursor(unsigned char x) {
-  if (x==ROLL_X-1)
-    x++;
-
   // Sides
   hires_Mask(x-1,DICE_CURSOR_BASE-27,1,28,0x14);
   hires_Mask(x+3,DICE_CURSOR_BASE-27,1,28,0x14);
@@ -903,8 +933,6 @@ void drawDiceCursor(unsigned char x) {
 }
 
 void hideDiceCursor(unsigned char x) {
-  if (x==ROLL_X-1)
-    x++;
   hires_Mask(x-1,DICE_CURSOR_BASE-28,5,2, 0);
   hires_Mask(x-1,DICE_CURSOR_BASE,5,2, 0);
 
@@ -912,6 +940,10 @@ void hideDiceCursor(unsigned char x) {
   hires_Mask(x-1,DICE_CURSOR_BASE-27,1,28,0);
   hires_Mask(x+3,DICE_CURSOR_BASE-27,1,28,0);
 }
+
+// CoCo 1/2 draws and erases the cursor with masks and keeps no backing store,
+// so there is nothing stale to discard.
+void cancelDiceCursor() {}
 
 void resetGraphics() {
   pmode(0, 0x400);

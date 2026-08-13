@@ -11,13 +11,43 @@
 
 uint16_t ii;
 
+// The CoCo 3 sits in high speed all game - HDB-DOS turns it on for every
+// DriveWire transfer - while the CoCo 1/2 runs at half that. sound() is the
+// Color BASIC ROM routine, whose pitch and duration are plain cpu delay loops,
+// so the same numbers come out an octave low and twice as long here.
+//
+// Corrected once, rather than at the call sites. Frequency goes as
+// 1/(256 - period), so shrinking that divisor lifts the pitch.
+#ifdef COCO3
+#define GAP_LOOP 60
+#else
+#define GAP_LOOP 34
+#define PITCH_NUM 9
+#define PITCH_DEN 5
+#endif
+
 void tone(uint8_t period, uint8_t dur, uint8_t wait) {
+#ifndef COCO3
+  {
+    static uint16_t inv;
+
+    inv = ((uint16_t)(256 - (uint16_t)period) * PITCH_DEN) / PITCH_NUM;
+    if (!inv)
+      inv = 1;
+
+    period = (uint8_t)(256 - inv);
+  }
+
+  // Rounded up, so the shortest blips stay audible instead of falling to zero
+  dur = (dur + 1) >> 1;
+#endif
+
   if (!prefs.disableSound) {
     sound(period, dur);
   }
-  
+
   while (wait--)
-    for (ii=0; ii<60; ii++) ;
+    for (ii=0; ii<GAP_LOOP; ii++) ;
 }
 
 

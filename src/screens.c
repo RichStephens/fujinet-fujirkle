@@ -200,7 +200,7 @@ void welcomeActionVerifyServerDetails() {
 void drawLogo(uint8_t x, uint8_t y)
 {
   drawBox(x,y,8,1);
-  // drawTextAlt colours by case: lower case renders cyan, upper case white
+  // drawTextAlt colors by case: lower case renders cyan, upper case white
   // (it upcases the glyph afterwards), which gives a two tone logo.
   drawTextAlt(x+1,y+1,"fujiRKLE");
 }

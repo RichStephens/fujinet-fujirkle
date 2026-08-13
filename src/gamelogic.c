@@ -30,14 +30,10 @@ typedef char assert_player_is_13_bytes[(sizeof(Player) == 13) ? 1 : -1];
 typedef char assert_game_is_header_plus_players[
                  (sizeof(Game) == 98 + PLAYER_MAX * 13) ? 1 : -1];
 
-// Board layout
-// Dice always sit at DICE_Y and drawDiceCursor uses x-1. Row 0 is unusable
-// because drawText underflows there.
+// Row 0 is unusable - drawText underflows there.
 #define BOARD_TOP 3
 
 #ifdef COCO3
-// The strip is split: buttons on the left, dice on the right, with a spare row
-// above and below the dice for the cursor frame.
 #define DICE_Y   18
 #define BTN_ROLL_X 4
 #define BTN_BANK_X 8
@@ -47,38 +43,41 @@ typedef char assert_game_is_header_plus_players[
 #define STRIP_LEFT   2
 #define STRIP_WALL   12
 #define STRIP_RIGHT  38
+#define STRIP_H      5
 #define PROMPT_Y 15
-// Hint text is lobby-only and must not overlap the strip box.
 #define HINT_Y   (HEIGHT - 2)
 #else
-// CoCo 1/2 uses a single row for dice and buttons. drawDie nudges y==160 down
-// by 5px, so the row below is slightly lower.
-#define DICE_Y   (HEIGHT - 5)
-#define DICE_X   8
+// All 32 columns are spoken for: border, 4 button cells, wall, 23 dice, 2
+// cursor margins, border. Dice cannot start at 8 - drawDiceCursor spans
+// x-1..x+3 and hideDiceCursor masks with 0, so the last cursor would erase the
+// right border. DICE_CURSOR_BASE in graphics.c must track DICE_Y.
+#define DICE_Y   17
+#define DICE_X   7
 #define BTN_ROLL_X 1
-#define BTN_BANK_X 4
-#define BTN_Y    (HEIGHT - 5)
-// Button frames sit at HEIGHT-6, so the prompt stays above them.
-#define PROMPT_Y (HEIGHT - 7)
-#define HINT_Y   (HEIGHT - 9)
+#define BTN_BANK_X 3
+#define BTN_Y    DICE_Y
+#define STRIP_TOP    (DICE_Y - 1)
+#define STRIP_LEFT   0
+#define STRIP_BTN_WALL 2
+#define STRIP_WALL   5
+#define STRIP_RIGHT  31
+#define STRIP_H      4
+#define PROMPT_Y 15
+#define HINT_Y   (HEIGHT - 2)
 #endif
 
 #define DIE_STEP 4
 #define DIE_ROLL 18   // plain face; 14-16 carry a rolls-remaining mark
 #define DIE_BANK 17
 
-// PANEL_H interior rows fit six players without touching the bottom border.
 #define PANEL_H  9
 #define KEPT_PER_ROW 3
 
-// The move timer and the final round banner share this row, clear of the panels
-// above and the dice strip below.
 #define STATUS_Y (BOARD_TOP + PANEL_H + 2)
 #define FINAL_X  2
 
-// Matches the server's TARGET_SCORE. The client can spot the final round
-// without a protocol field: it starts on exactly the condition the server uses,
-// a banked total reaching the target, and every total is already on screen.
+// Matches the server. The final round is derived from the scores already on
+// screen rather than sent over the wire.
 #define TARGET_SCORE 10000
 
 // Cursor stops: the six dice, then the two buttons
@@ -100,6 +99,8 @@ static int16_t lobbySig;
 static int16_t prevMyScore;
 static bool    noScoreFired;
 static bool    diceDirty;
+static bool    playersDirty;
+
 static int8_t  prevFinal;
 static bool    gameDoneFired;
 
@@ -111,25 +112,29 @@ static bool    pendScore;
 // Button release logic: a press clears the light, then next action relights it.
 static bool    btnLit;
 
-// Main polls are spaced at roughly 60 loop passes. processStateChange does not
-// itself advance a hold timer.
+// Main loop passes. A hold plus the roll it defers outlasts the gap between
+// polls, so handleAnimation pushes the next poll back rather than let it stall
+// the tumble halfway.
 #define HOLD_TICKS 60
 
-// The server sends hot-dice text, but the client’s screen update overwrites it
-// with "your turn" for the active player.
+// The server overwrites the hot dice text with "your turn" for the active
+// player, so the client raises that message itself.
 static uint8_t promptHold;
 
 // The turn total, held in the turn box for a moment after the turn ends
 static uint8_t turnHold;
 static int16_t heldTurn;
 
-// The dice behind that total. The server clears KeptDice while it banks, so the
-// complete set never reaches the client - we can only rebuild it for our own
-// turn, from what the server had confirmed plus the selection we banked with.
+// The server clears KeptDice as it banks, so the full set never reaches the
+// client - only our own turn can be rebuilt, from the confirmed dice plus the
+// selection we banked with.
 static char    heldKept[NUM_DICE + 1];
-static bool    heldKeptReady;  // composed at bank time, waiting on the delta
-static bool    heldKeptShow;   // the held total is ours, so its dice are good
+static bool    heldKeptReady;
+static bool    heldKeptShow;
 static int8_t  bankedWho;
+
+// bankedWho is recomputed every tick, so the hold keeps its own copy.
+static int8_t  heldWho;
 
 #define game clientState.game
 
@@ -137,10 +142,8 @@ static int8_t  bankedWho;
 // Small helpers
 //////////////////////////////////////////////////////////////////////////////
 
-// NOTE: h,i,j,k,x,y are shared globals used as scratch by the drawing code in
-// graphics.c as well. Anything here that loops while calling a draw function
-// must use its own counter, or the callee will reset the loop variable and the
-// loop will never finish.
+// h,i,j,k,x,y are shared scratch globals that graphics.c also uses. Any loop
+// calling a draw function needs its own counter or the callee resets it.
 
 /// @brief Right aligned unsigned number, padded with spaces to width
 static void drawNum(unsigned char nx, unsigned char ny, int value, unsigned char width) {
@@ -170,20 +173,34 @@ static void drawNum(unsigned char nx, unsigned char ny, int value, unsigned char
   drawText(nx, ny, tempBuffer);
 }
 
+// Hidden above 15 seconds, and on a bot's turn, which reports 0.
+static void drawTimer(unsigned char secs) {
+  if (secs && secs <= 15)
+    drawNum(WIDTH - 6, STATUS_Y, secs, 3);
+  else
+    drawSpace(WIDTH - 6, STATUS_Y, 3);
+}
+
 static bool isMyTurn() {
   return game.validMoves != 0;
 }
 
-/// @brief True once someone has crossed the target
-//
-// This is not "the next round is the last one": everyone else owes exactly one
-// more turn, and the game ends the moment play would return to whoever crossed
-// the line - which usually straddles a round boundary.
+// Not "one more round": everyone else owes exactly one more turn, and play ends
+// when it would return to whoever crossed the line.
 static bool inFinalRound() {
   static unsigned char fi;
-  for (fi = 0; fi < game.playerCount && fi < 6; fi++)
-    if (PLAYER_SCORE(game.players[fi]) >= TARGET_SCORE)
+  static int16_t fs;
+
+  for (fi = 0; fi < game.playerCount && fi < 6; fi++) {
+    // On the totals actually shown, or the banner beats the score that
+    // triggered it out of the turn box
+    fs = PLAYER_SCORE(game.players[fi]);
+    if (turnHold && (int8_t)fi == heldWho)
+      fs -= heldTurn;
+
+    if (fs >= TARGET_SCORE)
       return true;
+  }
   return false;
 }
 
@@ -192,8 +209,7 @@ static bool dieSelectable(unsigned char index) {
   return game.selectable[index] == '1';
 }
 
-// Only dice still in the pool count - a stale mark past the end would claim a
-// selection that cannot be sent
+// Only dice still in the pool - a stale mark past the end cannot be sent
 static bool anySelected() {
   static unsigned char si, spool;
   spool = (unsigned char)strlen(game.dice);
@@ -239,17 +255,44 @@ static void drawDiceRow() {
   }
 }
 
+// Dice are not on the text grid on every model, so drawDieSpace rather than
+// blanking text rows.
+static void clearStrip() {
+  static unsigned char ci;
+
+  for (ci = 0; ci < NUM_DICE; ci++)
+    drawDieSpace(DICE_X + ci * DIE_STEP, DICE_Y);
+
+#ifdef COCO3
+  drawDieSpace(BTN_ROLL_X, DICE_Y);
+  drawDieSpace(BTN_BANK_X, DICE_Y);
+#else
+  // One cell wide vertical words, so only those columns - the box frame stays
+  for (ci = 0; ci < 4; ci++) {
+    drawSpace(BTN_ROLL_X, BTN_Y + ci, 1);
+    drawSpace(BTN_BANK_X, BTN_Y + ci, 1);
+  }
+#endif
+}
+
+// The tumble only paints dice still in play, and waits out any turn-end hold -
+// without this the previous player's dice sit there through the pause.
+static void clearDiceArea() {
+  static unsigned char si;
+
+  for (si = 0; si < NUM_DICE; si++)
+    drawDieSpace(DICE_X + si * DIE_STEP, DICE_Y);
+}
+
 static void drawButtons() {
 #ifdef COCO3
   drawDie(BTN_ROLL_X, DICE_Y, DIE_ROLL, 0, btnLit && cursor == CUR_ROLL);
   drawDie(BTN_BANK_X, DICE_Y, DIE_BANK, 0, btnLit && cursor == CUR_BANK);
 #else
-  // Not enough columns for two 3x3 tiles beside six dice, so the CoCo 1/2
-  // buttons are one cell wide vertical words in a frame.
+  // No room for 3x3 tiles beside six dice, so vertical words instead, unframed
+  // inside the strip box. Selection shows as a color change.
   {
     static unsigned char bi;
-    drawBox(BTN_ROLL_X - 1, BTN_Y - 1, 1, 4);
-    drawBox(BTN_BANK_X - 1, BTN_Y - 1, 1, 4);
 
     for (bi = 0; bi < 4; bi++) {
       drawChar(BTN_ROLL_X, BTN_Y + bi, "roll"[bi], btnLit && cursor == CUR_ROLL);
@@ -278,12 +321,9 @@ static void hideCursor() {
 }
 
 /// @brief The player list and their banked totals
-//
-// The left panel's interior is columns 1..half-2. A name is up to 8 characters
-// and a score reaches five digits at 10000, so the name sits at column 1 and
-// the score is right aligned to the panel edge, leaving a gap between them.
 static void drawPlayers() {
   static unsigned char phalf, pi, prow;
+  static int16_t pscore;
 
   phalf = WIDTH / 2;
 
@@ -301,7 +341,14 @@ static void drawPlayers() {
       drawIcon(1, prow, ICON_MARK);
 
     drawText(2, prow, game.players[pi].name);
-    drawNum(phalf - 6, prow, PLAYER_SCORE(game.players[pi]), 5);
+
+    // The server banks on the instant the turn ends - hold the points out of
+    // the total while the turn box still shows them, so they appear to move
+    pscore = PLAYER_SCORE(game.players[pi]);
+    if (turnHold && (int8_t)pi == heldWho)
+      pscore -= heldTurn;
+
+    drawNum(phalf - 6, prow, pscore, 5);
   }
 }
 
@@ -312,7 +359,7 @@ static void drawTurnPanel() {
 
   thalf = WIDTH / 2;
 
-  // While the finished turn is held up, show the dice that earned it
+  // While the finished turn is held, the dice that earned it
   tkept = (turnHold && heldKeptShow) ? heldKept : game.keptDice;
   tn = (unsigned char)strlen(tkept);
 
@@ -339,7 +386,7 @@ static void drawTurnPanel() {
 //
 // This is a different screen from the game board - no dice, no turn score, and
 // the whole width given over to the player list and their ready state.
-/// @brief The waiting room: centred logo, room name, then the player list with
+/// @brief The waiting room: centered logo, room name, then the player list with
 /// each player's ready state. Bots are always ready, so they show "ready" from
 /// the moment you arrive.
 static void renderLobby() {
@@ -402,12 +449,9 @@ static void renderLobby() {
 
 /// @brief How much the player who just banked scored, or 0 if nobody did
 //
-// The final turn score never reaches the client: the server adds the last
-// selection, folds the total into the player's score and starts the next turn,
-// all before the next poll, so TurnScore reads 0 by the time we see it. The
-// score delta is that total, and it works for bots as well as for us.
-//
-// Must be called before scoresChanged(), which updates prevScores.
+// TurnScore reads 0 by the time we see it - the server folds it into the score
+// and starts the next turn in the same request - so the delta is the total.
+// Must run before scoresChanged(), which updates prevScores.
 static int16_t bankedDelta() {
   static unsigned char bi;
   static int16_t bd;
@@ -452,9 +496,8 @@ void renderBoardNamesMessages() {
     renderLobby();
   } else {
     if (state.drawBoard) {
-      // Must go through resetScreenNoBorder, not resetScreen directly: it clears
-      // the inBorderedScreen latch. Otherwise the next bordered screen thinks the
-      // screen is already prepared, skips its clear, and leaves these panels behind.
+      // Not resetScreen directly - this clears the inBorderedScreen latch, or
+      // the next bordered screen skips its clear and keeps these panels
       resetScreenNoBorder();
 
       // Boxed title, with the room name alongside it
@@ -464,14 +507,12 @@ void renderBoardNamesMessages() {
       drawBox(0, BOARD_TOP, half - 2, PANEL_H);
       drawBox(half, BOARD_TOP, WIDTH - half - 2, PANEL_H);
 
-#ifdef COCO3
-      // Buttons and dice in adjoining boxes. The second box's left border lands
-      // on the first one's right border, so they already share a wall; only the
-      // two corners where they meet need replacing with tees to weld the join.
-      drawBox(STRIP_LEFT, STRIP_TOP, STRIP_WALL - STRIP_LEFT - 1, 5);
-      drawBox(STRIP_WALL, STRIP_TOP, STRIP_RIGHT - STRIP_WALL - 1, 5);
-      drawIcon(STRIP_WALL, STRIP_TOP,     ICON_TEE_TOP);
-      drawIcon(STRIP_WALL, STRIP_TOP + 6, ICON_TEE_BOTTOM);
+      // Buttons and dice in one frame split by a shared wall
+      drawBox(STRIP_LEFT, STRIP_TOP, STRIP_RIGHT - STRIP_LEFT - 1, STRIP_H);
+      drawBoxDividerWide(STRIP_WALL, STRIP_TOP, STRIP_H);
+#ifdef STRIP_BTN_WALL
+      // CoCo 3 has room to space its tiles apart instead
+      drawBoxDivider(STRIP_BTN_WALL, STRIP_TOP, STRIP_H);
 #endif
 
       state.drawBoard = false;
@@ -484,13 +525,21 @@ void renderBoardNamesMessages() {
       prevFinal = -1;
       diceDirty = true;
       scoresChanged();
+      playersDirty = false;
       drawPlayers();
-    } else if (scoresChanged()) {
-      drawPlayers();
+    } else {
+      // scoresChanged updates prevScores, so it runs either way. drawPlayers
+      // blanks each row first, so twice in one tick reads as a flicker.
+      if (scoresChanged())
+        playersDirty = true;
+
+      if (playersDirty) {
+        playersDirty = false;
+        drawPlayers();
+      }
     }
 
-    // Turn score and the set aside dice both reset to nothing at the start of a
-    // turn, so watch the kept dice as well or stale dice stay on screen.
+    // Both reset at the start of a turn, so watch the kept dice too
     if (prevTurnScore != TURN_SCORE_OF(game) || strcmp(state.prevKept, game.keptDice) != 0) {
       prevTurnScore = TURN_SCORE_OF(game);
       strcpy(state.prevKept, game.keptDice);
@@ -510,17 +559,18 @@ void renderBoardNamesMessages() {
   if (game.round == ROUND_LOBBY)
     return;
 
-  // centerTextWide blanks the whole row, so the prompt cannot share one with the
-  // timer - they sit on adjacent rows between the panels and the strip box.
-  //
-  // Hot dice takes the row for a moment first. Blanking prevPrompt guarantees
-  // the strcmp below differs once the hold expires, so the real prompt comes
-  // back on its own.
+  // centerTextWide blanks the whole row, so the prompt cannot share one with
+  // the timer. Blanking prevPrompt brings the real prompt back when the hot
+  // dice hold expires.
   if (pendHotDice) {
     centerTextWide(PROMPT_Y, "hot dice! roll all six again");
     promptHold = HOLD_TICKS;
     prevPrompt[0] = 0;
-  } else if (!promptHold && strcmp(prevPrompt, game.prompt) != 0) {
+  } else if (!promptHold && !state.rollFrames &&
+             strcmp(prevPrompt, game.prompt) != 0) {
+    // Not while a roll is tumbling: the prompt reports that roll's outcome, so
+    // printing it first announces the verdict before showing the dice that
+    // earned it. handleAnimation puts it up as the roll settles.
     strcpy(prevPrompt, game.prompt);
     centerTextWide(PROMPT_Y, game.prompt);
   }
@@ -541,9 +591,18 @@ void renderBoardNamesMessages() {
       drawSpace(0, HINT_Y, WIDTH);
   }
 
-  if (diceDirty && game.round != ROUND_LOBBY) {
+  if (diceDirty && game.round != ROUND_LOBBY && game.round != ROUND_GAMEOVER) {
+    // One shot: processStateChange runs on every poll, not only on a real
+    // change, so leaving this set repainted the strip once a second. While a
+    // tumble is pending the animation owns the dice, or the settled values
+    // would show before the roll.
     diceDirty = false;
-    drawDiceRow();
+
+    if (state.rollFrames)
+      clearDiceArea();
+    else
+      drawDiceRow();
+
     drawButtons();
   }
 }
@@ -577,10 +636,13 @@ void clearRenderState() {
   prevMyScore = -1;
   noScoreFired = false;
   prevFinal = -1;
+  playersDirty = false;
   gameDoneFired = false;
   pendHotDice = pendNoScore = pendScore = false;
   promptHold = turnHold = 0;
+  state.playerMadeMove = false;
   heldTurn = 0;
+  heldWho = -1;
   heldKept[0] = 0;
   heldKeptReady = heldKeptShow = false;
   btnLit = true;
@@ -591,21 +653,53 @@ void clearRenderState() {
   diceDirty = true;
 }
 
+// One per tick, most significant first - they would only talk over each other.
+static void playPendingSounds() {
+  if (game.round == ROUND_GAMEOVER) {
+    // Latched, or the fanfare repeats every poll for as long as the result is up
+    if (!gameDoneFired) {
+      gameDoneFired = true;
+      soundGameDone();
+    }
+  } else {
+    gameDoneFired = false;
+
+    if (pendNoScore)
+      soundNoScore();
+    else if (pendHotDice)
+      soundHotDice();
+    else if (pendScore)
+      soundScore();
+  }
+
+  pendNoScore = pendHotDice = pendScore = false;
+}
+
 void processStateChange() {
   static bool wasMyTurn;
   static int16_t banked;
 
-  // Only rebuild the screen when the kind of screen changes - into or out of the
-  // lobby or the game over screen - or when the player list itself changes. An
-  // ordinary round bump just means play wrapped back round to the first player,
-  // and the board is still the same board, so it repaints like any other turn.
-  // prevRound starts at 99, which is ROUND_GAMEOVER, so a fresh render still
-  // takes the full repaint path.
+
+  // Only when the kind of screen changes, or the player list does. An ordinary
+  // round bump is the same board. prevRound starts at 99 - ROUND_GAMEOVER - so
+  // a fresh render still takes the full repaint path.
   if (state.prevRound != game.round || state.prevPlayerCount != game.playerCount) {
+    // Game over is not a new screen - only the result line changes
     if (state.prevRound == ROUND_LOBBY    || game.round == ROUND_LOBBY ||
-        state.prevRound == ROUND_GAMEOVER || game.round == ROUND_GAMEOVER ||
+        state.prevRound == ROUND_GAMEOVER ||
         state.prevPlayerCount != game.playerCount)
       state.drawBoard = true;
+
+    // Dice still in the pool would otherwise sit under the result
+    if (game.round == ROUND_GAMEOVER && state.prevRound != ROUND_GAMEOVER) {
+      hideCursor();
+      clearStrip();
+      diceDirty = false;
+
+      // Nothing may hold the result line back
+      promptHold = 0;
+      prevPrompt[0] = 0;
+    }
 
     state.prevRound = game.round;
     state.prevPlayerCount = game.playerCount;
@@ -620,12 +714,14 @@ void processStateChange() {
     clearSelection();
     diceDirty = true;
 
+    // Our move came back, so waitOnPlayerMove may take the player again
+    state.playerMadeMove = false;
+
     if (cursor < NUM_DICE && cursor >= (int8_t)strlen(game.dice))
       cursor = 0;
 
-    // Hot dice: a full pool again with points already held and nothing set
-    // aside. That combination cannot occur at the start of a turn, so it needs
-    // no prompt matching.
+    // Hot dice: a full pool with points held and nothing set aside, which
+    // cannot happen at the start of a turn
     if (TURN_SCORE_OF(game) > 0 && strlen(game.dice) == NUM_DICE && game.keptDice[0] == 0)
       pendHotDice = true;
   }
@@ -648,48 +744,34 @@ void processStateChange() {
     prevMyScore = PLAYER_SCORE(game.players[0]);
   }
 
-  // Whose turn it is is shown by a marker beside the name. The inherited
-  // setHighlight tinted vertical scorecard columns, which do not exist here -
-  // it painted over the dice row instead.
-  // Skip when a full repaint is already queued. Otherwise, on the very tick the
-  // game starts, this paints the game player list over the lobby before
-  // renderBoardNamesMessages clears the screen - a visible flash of half the
-  // lobby being wiped, then everything redrawn.
-  if (state.prevActivePlayer != game.activePlayer) {
-    state.prevActivePlayer = game.activePlayer;
-    if (game.round != ROUND_LOBBY && !state.drawBoard)
-      drawPlayers();
-  }
-
-  // A turn just ended with points banked - hold the total in the turn box long
-  // enough to read it, rather than letting it vanish into the player's score.
-  // Must come before renderBoardNamesMessages, which updates prevScores.
+  // Hold the banked total in the turn box long enough to read. Must settle
+  // before anything repaints the player list and before renderBoardNamesMessages
+  // updates prevScores, or the list flicks between old and new in one tick.
   if (game.round > ROUND_LOBBY && game.round != ROUND_GAMEOVER) {
     banked = bankedDelta();
 
     if (banked > 0) {
       heldTurn = banked;
+      heldWho = bankedWho;
       turnHold = HOLD_TICKS;
 
-      // Only our own dice can be rebuilt, and only for the bank we recorded -
-      // otherwise the box would show our last hand beside a bot's total
+      // Only our own dice, and only for the bank we recorded - otherwise the
+      // box shows our last hand beside a bot's total
       heldKeptShow = (bankedWho == 0) && heldKeptReady;
       heldKeptReady = false;
 
-      // Force the turn panel to repaint. Banking on the first roll of a turn
-      // leaves both the turn score and the kept dice reading exactly what they
-      // read before - 0 and empty - so its own change test never fires and the
-      // held total would never be drawn at all.
-      prevTurnScore = -1;
-
-    // Not else-less: on the tick the hold starts the next player has not moved
-    // yet, and testing this there would cancel the hold before it was ever seen
-    } else if (turnHold && TURN_SCORE_OF(game) > 0) {
-      // The next player is already scoring, so stop holding the old total
-      turnHold = 0;
-      heldKeptShow = false;
+      // Banking on a turn's first roll leaves turn score and kept dice reading
+      // what they read before, so the panel's own change test never fires
       prevTurnScore = -1;
     }
+  }
+
+  // Skip when a full repaint is queued, or on the tick the game starts this
+  // paints the player list over the lobby before the screen is cleared.
+  if (state.prevActivePlayer != game.activePlayer) {
+    state.prevActivePlayer = game.activePlayer;
+    if (game.round != ROUND_LOBBY && !state.drawBoard)
+      playersDirty = true;
   }
 
   renderBoardNamesMessages();
@@ -697,35 +779,58 @@ void processStateChange() {
   // Sounds that comment on an event play only now, with the message they refer
   // to already on screen. One per tick is plenty - they would only talk over
   // each other - so the most significant wins.
-  if (game.round == ROUND_GAMEOVER) {
-    // processStateChange runs on every poll, so this needs a latch or the win
-    // fanfare repeats twice a second for as long as the result is up
-    if (!gameDoneFired) {
-      gameDoneFired = true;
-      soundGameDone();
-    }
-  } else if (pendNoScore) {
-    soundNoScore();
-  } else if (pendHotDice) {
-    soundHotDice();
-  } else if (pendScore) {
-    soundScore();
-  }
+  // ...but not while a roll is still tumbling. These comment on the outcome of
+  // that roll, so they belong after it has landed and its message is up.
+  // handleAnimation plays them the moment the dice settle.
+  //
+  // Hot dice is the exception, and the reason is the tense: it announces the
+  // roll that is about to happen rather than judging the one that just did, so
+  // its message and sound lead the dice instead of following them.
+  if (!state.rollFrames || pendHotDice)
+    playPendingSounds();
 
-  if (game.round != ROUND_GAMEOVER)
-    gameDoneFired = false;
-  pendNoScore = pendHotDice = pendScore = false;
-
+  // A fresh turn, so the player is free to move again even if the dice happened
+  // to come back identical to the last roll
   if (isMyTurn() && !wasMyTurn) {
     cursor = 0;
+    state.playerMadeMove = false;
     soundMyTurn();
     showCursor();
   }
   wasMyTurn = isMyTurn();
 }
 
+// Timed holds. These restore what they were covering themselves rather than
+// waiting on the next poll, which may be a second away or, if the server state
+// stops changing, may never come. waitOnPlayerMove owns the machine for the
+// length of a turn, so it has to drive these too or a message raised just
+// before the player's turn would sit there until they moved.
+static void tickHolds() {
+  if (promptHold && !--promptHold) {
+    strcpy(prevPrompt, game.prompt);
+    centerTextWide(PROMPT_Y, game.prompt);
+  }
+
+  // Clearing the turn box and landing the points in the total happen on the
+  // same frame - that pairing is what sells the move
+  if (turnHold && !--turnHold) {
+    heldKeptShow = false;
+    prevTurnScore = -1;
+    // The points landing may be what starts the final round
+    prevFinal = -1;
+    drawTurnPanel();
+    drawPlayers();
+  }
+}
+
 void handleAnimation() {
   static unsigned char n, ai;
+
+  // NOTE: do not add waitvsync() here. It is `sync` on the 6809, which halts
+  // until an interrupt, and HDB-DOS masks interrupts around DriveWire
+  // transfers - so after any fujinet call it stalls for an unpredictable time
+  // rather than one frame. Tried 2026-08-13: it froze the tumble mid-roll and
+  // sometimes swallowed it entirely.
 
   // Nothing animates in the waiting room. Without this the dice tumble can be
   // triggered while the ready screen is still up.
@@ -735,56 +840,73 @@ void handleAnimation() {
     return;
   }
 
-  // Timed holds. These restore what they were covering themselves rather than
-  // waiting on the next poll, which may be a second away or, if the server
-  // state stops changing, may never come.
-  if (promptHold && !--promptHold) {
-    strcpy(prevPrompt, game.prompt);
-    centerTextWide(PROMPT_Y, game.prompt);
+  tickHolds();
+
+  // A hold plus the roll it defers is longer than the gap between polls, so
+  // left alone the round trip lands mid tumble and stalls it halfway. Push the
+  // next poll back until both have finished rather than overlapping them - the
+  // turn total has to land before the next player's dice start moving.
+  if (turnHold && state.apiCallWait < turnHold + ROLL_FRAMES + 6)
+    state.apiCallWait = turnHold + ROLL_FRAMES + 6;
+
+  // The game is over - the result is on screen and nothing should be moving
+  // under it. Drop any roll the server had queued rather than deferring it.
+  if (game.round == ROUND_GAMEOVER) {
+    state.rollFrames = 0;
+    return;
   }
 
-  if (turnHold && !--turnHold) {
-    heldKeptShow = false;
-    prevTurnScore = -1;
-    drawTurnPanel();
-  }
+  // Let the finished turn's total land before the next dice tumble. Only ever
+  // hold a tumble back - interrupting one leaves a half-played roll frozen on
+  // screen. Not gated on promptHold: the hot dice message and sound already
+  // lead the roll, and waiting for that hold swapped the message back to "your
+  // turn" on the frame the tumble started.
+  if (turnHold && state.rollFrames == ROLL_FRAMES)
+    return;
 
   // Tumble the dice for a few frames after a roll
   if (state.rollFrames) {
     state.rollFrames--;
-    n = (unsigned char)strlen(game.dice);
 
-    for (ai = 0; ai < NUM_DICE && ai < n; ai++) {
-      unsigned char dieValue;
-      if (state.rollFrames)
-        dieValue = (unsigned char)((rand() % 6) + 1);
-      else
-        dieValue = (unsigned char)(game.dice[ai] - '0');
-      drawDie(DICE_X + ai * DIE_STEP, DICE_Y, dieValue, 0, 0);
-    }
+    if (state.rollFrames) {
+      n = (unsigned char)strlen(game.dice);
 
-    if (state.rollFrames % ROLL_SOUND_MOD == 0)
+      for (ai = 0; ai < NUM_DICE && ai < n; ai++)
+        drawDie(DICE_X + ai * DIE_STEP, DICE_Y,
+                (unsigned char)((rand() % 6) + 1), 0, 0);
+
+      if (state.rollFrames % ROLL_SOUND_MOD == 0)
+        soundRollDice();
+    } else {
+      // drawDiceRow, so positions that left the pool are blanked in the same pass
+      drawDiceRow();
+      diceDirty = false;
       soundRollDice();
 
-    if (!state.rollFrames && isMyTurn())
-      showCursor();
+      // Dice, then message, then sound - never before the roll lands
+      if (!promptHold && strcmp(prevPrompt, game.prompt) != 0) {
+        strcpy(prevPrompt, game.prompt);
+        centerTextWide(PROMPT_Y, game.prompt);
+      }
+
+      playPendingSounds();
+
+      if (isMyTurn())
+        showCursor();
+    }
 
     return;
   }
 
-  // Keep the move timer visible. It cannot use HEIGHT-1: on CoCo 1/2 that row
-  // is inside the button frames, and TIMER_X lands in the bank button.
-  //
-  // Only during play. Outside it moveTime carries a countdown that has nothing
-  // to do with a move - the start countdown in the lobby, the return to the
-  // lobby on the game over screen - and drawing it leaves a stray number
-  // ticking down to zero where the move timer sits.
+  // Only during play. Elsewhere moveTime carries an unrelated countdown - the
+  // lobby start, the return to lobby at game over - and drawing it leaves a
+  // stray number ticking down where the move timer sits.
   if (game.round == ROUND_LOBBY || game.round == ROUND_GAMEOVER)
     return;
 
   if (game.moveTime != prevMoveTime) {
     prevMoveTime = game.moveTime;
-    drawNum(WIDTH - 6, STATUS_Y, game.moveTime, 3);
+    drawTimer(game.moveTime);
   }
 }
 
@@ -793,19 +915,19 @@ void handleAnimation() {
 //////////////////////////////////////////////////////////////////////////////
 
 /// @brief Commit the current selection, either rolling on or banking
+/// @return true if a move actually went out
 //
-// The mask must be exactly as long as the pool still in play. The server's
-// applyKeepMask rejects any other length outright, so sending the full six
-// characters silently fails from the second roll onwards, once dice have been
-// set aside and the pool has shrunk.
-static void sendSelection(bool bank) {
+// The mask must be exactly as long as the pool still in play - applyKeepMask
+// rejects any other length outright, silently.
+static bool sendSelection(bool bank) {
   static unsigned char pool, mi, kn;
 
   pool = (unsigned char)strlen(game.dice);
 
+  // Nothing selected is not a move - the caller must stay on the player
   if (!anySelected() || !pool) {
     soundRelease();
-    return;
+    return false;
   }
 
   strcpy(tempBuffer, bank ? "bank/" : "roll/");
@@ -814,9 +936,7 @@ static void sendSelection(bool bank) {
     tempBuffer[5 + mi] = selMask[mi];
   tempBuffer[5 + pool] = 0;
 
-  // Banking ends the turn, and the server wipes the kept dice as it does so.
-  // Record the complete set now - what it has already confirmed, plus the dice
-  // going out with this press - or it is gone before the next poll.
+  // The server wipes the kept dice as it banks, so record the complete set now
   if (bank) {
     strcpy(heldKept, game.keptDice);
     kn = (unsigned char)strlen(heldKept);
@@ -832,63 +952,122 @@ static void sendSelection(bool bank) {
   soundRollButton();
   hideCursor();
 
-  // Let go of the button before the move goes out, so it does not sit lit for
-  // the whole server round trip
+  // Release before the move goes out, so it is not lit for the round trip
   btnLit = false;
   drawButtons();
 
   clearSelection();
   sendMove(tempBuffer);
+  return true;
 }
 
+// Holds the machine for the length of the move, the way fujitzee does, so the
+// poll loop and the input handler do not both own the screen. The countdown
+// runs off the jiffy clock because nothing is polling meanwhile.
+//
+// Blocking is safe against being dropped: the longest move is 255 seconds less
+// the grace, against a five minute PLAYER_PING_TIMEOUT.
 void waitOnPlayerMove() {
   static int8_t next;
+  static uint8_t waitCount, jps, secs;
+  static uint16_t maxJifs, elapsed;
 
-  if (!isMyTurn() || state.rollFrames)
+  // moveTime reads 0 in the gap around our own move; entering then would time
+  // us out at once
+  if (!isMyTurn() || state.rollFrames || state.playerMadeMove || !game.moveTime)
     return;
 
-  // Move along the row of dice and buttons, skipping die positions that are no
-  // longer in the pool - once dice are set aside there are fewer than six
-  if (input.dirX) {
-    next = cursor;
-    do {
-      next += input.dirX;
-      if (next < 0)
-        next = CUR_COUNT - 1;
-      else if (next >= CUR_COUNT)
-        next = 0;
-    } while (next < NUM_DICE && next >= (int8_t)strlen(game.dice));
+  jps = getJiffiesPerSecond();
+  maxJifs = (uint16_t)jps * game.moveTime;
+  waitCount = 0;
+  resetTimer();
 
-    hideCursor();
-    cursor = next;
-    if (cursor >= NUM_DICE)
-      soundScoreCursor();
-    else
-      soundCursor();
-    btnLit = true;
-    drawButtons();
-    showCursor();
-  }
+  while (true) {
+    waitvsync();
+    tickHolds();
 
-  if (input.trigger || input.key == KEY_SPACEBAR || input.key == KEY_RETURN) {
-    if (cursor == CUR_ROLL) {
-      sendSelection(false);
-    } else if (cursor == CUR_BANK) {
-      sendSelection(true);
-    } else if (dieSelectable(cursor)) {
-      // Toggle this die in or out of the set aside pile
-      selMask[cursor] = selMask[cursor] == '1' ? '0' : '1';
-      if (selMask[cursor] == '1')
-        soundKeep();
-      else
-        soundRelease();
+    // Ours to run - nothing is polling the server meanwhile
+    if (++waitCount >= 15) {
+      waitCount = 0;
+      elapsed = getTime();
+
+      if (elapsed >= maxJifs) {
+        // The server banks our best dice. Our clock has the grace taken off,
+        // so it runs out first.
+        centerTextWide(PROMPT_Y, "out of time - banking for you");
+        prevPrompt[0] = 0;
+        promptHold = HOLD_TICKS;
+        state.playerMadeMove = true;
+        return;
+      }
+
+      secs = (uint8_t)((maxJifs - elapsed) / jps);
+      if (secs != prevMoveTime) {
+        prevMoveTime = secs;
+        drawTimer(secs);
+      }
+    }
+
+    // Skip die positions no longer in the pool
+    if (input.dirX) {
+      next = cursor;
+      do {
+        next += input.dirX;
+        if (next < 0)
+          next = CUR_COUNT - 1;
+        else if (next >= CUR_COUNT)
+          next = 0;
+      } while (next < NUM_DICE && next >= (int8_t)strlen(game.dice));
 
       hideCursor();
-      drawDiceRow();
+      cursor = next;
+      if (cursor >= NUM_DICE)
+        soundScoreCursor();
+      else
+        soundCursor();
+      btnLit = true;
+      drawButtons();
       showCursor();
-    } else {
-      soundRelease();
     }
+
+    if (input.trigger || input.key == KEY_SPACEBAR || input.key == KEY_RETURN) {
+      if (cursor == CUR_ROLL || cursor == CUR_BANK) {
+        // Nothing selected is not a move - stay on the player
+        if (sendSelection(cursor == CUR_BANK)) {
+          state.playerMadeMove = true;
+          return;
+        }
+      } else if (dieSelectable(cursor)) {
+        // Toggle this die in or out of the set aside pile
+        selMask[cursor] = selMask[cursor] == '1' ? '0' : '1';
+        if (selMask[cursor] == '1')
+          soundKeep();
+        else
+          soundRelease();
+
+        hideCursor();
+        drawDiceRow();
+        showCursor();
+      } else {
+        soundRelease();
+      }
+    }
+
+    switch (input.key) {
+      case 'h':
+      case 'H':
+        showInGameHelp();
+        return;
+
+      case KEY_ESCAPE:
+      case KEY_ESCAPE_ALT:
+        showInGameMenuScreen();
+        clearRenderState();
+        return;
+    }
+
+    // Read input for the next pass
+    readCommonInput();
   }
 }
 

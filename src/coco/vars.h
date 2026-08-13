@@ -33,8 +33,7 @@
 #define ICON_CURSOR_ALT   0xBF
 #define ICON_CURSOR_BLIP  0x3E
 
-// Box joins: where two boxes butt together the meeting corners become tees, so
-// the pair reads as one frame split by a shared wall.
+// Box joins - the tees that weld a divider to a box rule.
 #define ICON_TEE_TOP      0x5B
 #define ICON_TEE_BOTTOM   0x58
 
