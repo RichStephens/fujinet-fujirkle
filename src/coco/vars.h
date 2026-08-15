@@ -13,6 +13,9 @@
 
 #define ROLL_SOUND_MOD 1
 #define ROLL_FRAMES 8
+// PACE_WITH_VSYNC is deliberately NOT set: CoCo waitvsync is `sync`, which
+// halts until an interrupt, and HDB-DOS masks those around DriveWire transfers.
+// Every frame plays a sound here, and the ROM routine paces it.
 #define BOTTOM_HEIGHT 4
 #define SCORES_X 10
 #define GAMEOVER_PROMPT_Y HEIGHT-3
@@ -45,6 +48,7 @@
 
 #define ROLL_SOUND_MOD 1 // How often to play roll sound
 #define ROLL_FRAMES 11 // How many roll frames to play
+// PACE_WITH_VSYNC not set - see the CoCo 3 note above
 #define BOTTOM_HEIGHT 3 // How high the bottom panel is
 #define SCORES_X 2 // X start of scoreboard
 #define GAMEOVER_PROMPT_Y HEIGHT-2
@@ -68,7 +72,9 @@
 #endif /* COCO3 */
 
 // Common to all CoCo models
-#define QUERY_SUFFIX "&be=1" // Big Endian response for CoCo (6809)
+// The 6809 is big endian, so ask the server to match and decode high byte first
+#define QUERY_SUFFIX "&be=1"
+#define WIRE_BIG_ENDIAN 1
 
 #undef ESCAPE
 #define ESCAPE "BREAK"

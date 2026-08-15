@@ -1,6 +1,6 @@
 PRODUCT = fujirkle
 PRODUCT_UPPER = FUJIRKLE
-PLATFORMS = coco
+PLATFORMS = coco msdos
 
 # CoCo targets:
 #   make coco        → CoCo 1/2 build
@@ -18,7 +18,12 @@ INCLUDE_DIRS = src/platform-specific
 # cc65 ships its own real versions, so adding it globally would shadow them.
 EXTRA_INCLUDE_COCO = src/include
 
+# msdos needs fujinet-lib-experimental for RS232 support; scoped so it does not
+# drag the experimental branch into the other platforms.
 FUJINET_LIB =
+ifeq ($(PLATFORM),msdos)
+  FUJINET_LIB = https://github.com/FozzTexx/fujinet-lib-experimental.git
+endif
 
 # CoCo: optimization + memory layout
 CFLAGS_EXTRA_COCO  += -fomit-frame-pointer -O2 -Wno-const
@@ -42,6 +47,10 @@ endif
 # Support 'make coco3'
 coco3:
 	$(MAKE) coco MAKE_COCO3=COCO3
+
+# MS-DOS (Watcom): bundle AUTOEXEC.BAT into the disk image
+msdos/disk-post::
+	mcopy -t -i $(DISK) src/msdos/AUTOEXEC.BAT "::AUTOEXEC.BAT"
 
 include mekkogx/toplevel-rules.mk
 

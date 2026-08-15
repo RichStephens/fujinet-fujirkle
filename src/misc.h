@@ -7,6 +7,7 @@
 #endif
 #include "platform-specific/graphics.h"
 #include "platform-specific/input.h"
+#include "platform-specific/vars.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -62,18 +63,27 @@ typedef struct {
 // mapped struct is at the mercy of each compiler's alignment rules - CMOC pads
 // it, Watcom pads it differently - and a single pad byte shifts every field
 // after it, which shows up as names losing their leading characters and their
-// terminator. Scores are therefore carried as big endian byte pairs (the
-// clients request be=1) and recombined with PLAYER_SCORE below.
+// terminator. Scores are therefore carried as byte pairs and recombined below.
 typedef struct {
   char name[9];
   uint8_t alias;
   int8_t ready;         // READY_YES / READY_UNSET / READY_VIEWING (-2)
-  uint8_t scoreHi;
-  uint8_t scoreLo;
+  uint8_t score0;       // first score byte on the wire
+  uint8_t score1;
 } Player;
 
-#define PLAYER_SCORE(p) ((int16_t)(((uint16_t)(p).scoreHi << 8) | (p).scoreLo))
-#define TURN_SCORE_OF(g) ((int16_t)(((uint16_t)(g).turnScoreHi << 8) | (g).turnScoreLo))
+// The pair arrives in whichever order the client asked the server for: high
+// byte first only when it requested be=1, which is what WIRE_BIG_ENDIAN marks.
+// Asking for big endian on a little endian machine would read every score
+// byte swapped - wildly high, or 0 once the swap turns an int16 negative.
+#ifdef WIRE_BIG_ENDIAN
+#define WIRE_WORD(a, b) ((int16_t)(((uint16_t)(a) << 8) | (b)))
+#else
+#define WIRE_WORD(a, b) ((int16_t)(((uint16_t)(b) << 8) | (a)))
+#endif
+
+#define PLAYER_SCORE(p)  WIRE_WORD((p).score0, (p).score1)
+#define TURN_SCORE_OF(g) WIRE_WORD((g).turnScore0, (g).turnScore1)
 
 typedef struct {
   uint8_t count;
@@ -101,8 +111,8 @@ typedef struct {
   uint8_t moveTime;
   uint8_t viewing;
   uint8_t validMoves;   // MOVE_ROLL | MOVE_BANK
-  uint8_t turnScoreHi;  // points held this turn, lost on a no-score roll
-  uint8_t turnScoreLo;
+  uint8_t turnScore0;   // points held this turn, lost on a no-score roll
+  uint8_t turnScore1;
   char dice       [7];  // the pool still in play
   char keptDice   [7];  // set aside so far this turn
   char selectable [7];  // '1' where that die can be part of a scoring set

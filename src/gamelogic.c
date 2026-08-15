@@ -33,7 +33,9 @@ typedef char assert_game_is_header_plus_players[
 // Row 0 is unusable - drawText underflows there.
 #define BOARD_TOP 3
 
-#ifdef COCO3
+// Two layouts, chosen by width rather than by model: 40 columns gets the split
+// strip with 3x3 button tiles, 32 the tighter one with vertical words.
+#if WIDTH >= 40
 #define DICE_Y   18
 #define BTN_ROLL_X 4
 #define BTN_BANK_X 8
@@ -100,6 +102,11 @@ static int16_t prevMyScore;
 static bool    noScoreFired;
 static bool    diceDirty;
 static bool    playersDirty;
+
+// Set for the one tick the turn passes. The prompt arriving with it names the
+// new player rather than judging the roll about to tumble, so it must not be
+// held back behind that roll.
+static bool    turnChanged;
 
 static int8_t  prevFinal;
 static bool    gameDoneFired;
@@ -263,7 +270,7 @@ static void clearStrip() {
   for (ci = 0; ci < NUM_DICE; ci++)
     drawDieSpace(DICE_X + ci * DIE_STEP, DICE_Y);
 
-#ifdef COCO3
+#if WIDTH >= 40
   drawDieSpace(BTN_ROLL_X, DICE_Y);
   drawDieSpace(BTN_BANK_X, DICE_Y);
 #else
@@ -285,7 +292,7 @@ static void clearDiceArea() {
 }
 
 static void drawButtons() {
-#ifdef COCO3
+#if WIDTH >= 40
   drawDie(BTN_ROLL_X, DICE_Y, DIE_ROLL, 0, btnLit && cursor == CUR_ROLL);
   drawDie(BTN_BANK_X, DICE_Y, DIE_BANK, 0, btnLit && cursor == CUR_BANK);
 #else
@@ -566,14 +573,18 @@ void renderBoardNamesMessages() {
     centerTextWide(PROMPT_Y, "hot dice! roll all six again");
     promptHold = HOLD_TICKS;
     prevPrompt[0] = 0;
-  } else if (!promptHold && !state.rollFrames &&
+  } else if (!promptHold && (!state.rollFrames || turnChanged) &&
              strcmp(prevPrompt, game.prompt) != 0) {
     // Not while a roll is tumbling: the prompt reports that roll's outcome, so
     // printing it first announces the verdict before showing the dice that
     // earned it. handleAnimation puts it up as the roll settles.
+    // Unless the turn just passed: that prompt is the next player's name and
+    // has nothing to do with the roll about to run.
     strcpy(prevPrompt, game.prompt);
     centerTextWide(PROMPT_Y, game.prompt);
   }
+
+  turnChanged = false;
 
   // The server prompt says what it is waiting for, not what to press
   if (game.round == ROUND_LOBBY)
@@ -637,6 +648,7 @@ void clearRenderState() {
   noScoreFired = false;
   prevFinal = -1;
   playersDirty = false;
+  turnChanged = false;
   gameDoneFired = false;
   pendHotDice = pendNoScore = pendScore = false;
   promptHold = turnHold = 0;
@@ -770,6 +782,7 @@ void processStateChange() {
   // paints the player list over the lobby before the screen is cleared.
   if (state.prevActivePlayer != game.activePlayer) {
     state.prevActivePlayer = game.activePlayer;
+    turnChanged = true;
     if (game.round != ROUND_LOBBY && !state.drawBoard)
       playersDirty = true;
   }
@@ -795,7 +808,12 @@ void processStateChange() {
     cursor = 0;
     state.playerMadeMove = false;
     soundMyTurn();
-    showCursor();
+
+    // Not while a roll is pending - the strip is cleared waiting for the
+    // tumble, so this would park the cursor on an empty row. The dice settling
+    // raises it instead.
+    if (!state.rollFrames)
+      showCursor();
   }
   wasMyTurn = isMyTurn();
 }
@@ -825,6 +843,12 @@ static void tickHolds() {
 
 void handleAnimation() {
   static unsigned char n, ai;
+
+#ifdef PACE_WITH_VSYNC
+  // One frame per call, the way fujitzee paces its board. This makes every
+  // hold counted in loop passes a real duration too.
+  waitvsync();
+#endif
 
   // NOTE: do not add waitvsync() here. It is `sync` on the 6809, which halts
   // until an interrupt, and HDB-DOS masks interrupts around DriveWire
@@ -1028,6 +1052,20 @@ void waitOnPlayerMove() {
       btnLit = true;
       drawButtons();
       showCursor();
+    }
+
+    // Up and down jump straight to a button rather than walking the row, and
+    // only select - the trigger still commits.
+    if (input.dirY) {
+      next = input.dirY < 0 ? CUR_ROLL : CUR_BANK;
+
+      if (next != cursor) {
+        hideCursor();
+        cursor = next;
+        soundScoreCursor();
+        btnLit = true;
+        showCursor();
+      }
     }
 
     if (input.trigger || input.key == KEY_SPACEBAR || input.key == KEY_RETURN) {

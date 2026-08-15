@@ -172,10 +172,21 @@ extern void clearRenderState(void);
 
 #define POLL_PASSES 60          // main.c waits 59 loop passes between polls
 
+// Lay a value down in the same byte order PLAYER_SCORE/TURN_SCORE_OF read it
+static void setWireWord(uint8_t *b0, uint8_t *b1, int score) {
+#ifdef WIRE_BIG_ENDIAN
+  *b0 = (uint8_t)(score >> 8);
+  *b1 = (uint8_t)(score & 0xFF);
+#else
+  *b0 = (uint8_t)(score & 0xFF);
+  *b1 = (uint8_t)(score >> 8);
+#endif
+}
+
 static void setPlayer(int idx, const char *name, int score) {
   strncpy(clientState.game.players[idx].name, name, 8);
-  clientState.game.players[idx].scoreHi = (uint8_t)(score >> 8);
-  clientState.game.players[idx].scoreLo = (uint8_t)(score & 0xFF);
+  setWireWord(&clientState.game.players[idx].score0,
+              &clientState.game.players[idx].score1, score);
 }
 
 // One server poll followed by the loop passes that run before the next one
@@ -227,7 +238,7 @@ int main(void) {
   strcpy(clientState.game.dice, "135246");
   strcpy(clientState.game.keptDice, "");
   strcpy(clientState.game.selectable, "101000");
-  clientState.game.turnScoreHi = clientState.game.turnScoreLo = 0;
+  setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 0);
   poll("their bank + our opening roll (arms turnHold)");
 
   // --- We keep three and roll the rest, and fujirkle
@@ -242,6 +253,17 @@ int main(void) {
   clientState.game.moveTime = 2; poll("fujirkle held (2)");
   clientState.game.moveTime = 1; poll("fujirkle held (3)");
 
+  // --- The turn passes straight out of the fujirkle: the next player's name
+  // --- must reach the prompt row before their first tumble, not after it
+  clientState.game.activePlayer = 1;
+  clientState.game.validMoves = 0;
+  strcpy(clientState.game.dice, "351624");
+  strcpy(clientState.game.keptDice, "");
+  strcpy(clientState.game.selectable, "000000");
+  setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 0);
+  strcpy(clientState.game.prompt, "1ai bob rolling");
+  poll("TURN PASSES after fujirkle");
+
   // --- Hot dice: every die set aside, so the server grants a fresh six and
   // --- clears KeptDice while the turn score carries over
   clientState.game.activePlayer = 0;
@@ -249,15 +271,14 @@ int main(void) {
   strcpy(clientState.game.dice, "162534");
   strcpy(clientState.game.keptDice, "");
   strcpy(clientState.game.selectable, "100010");
-  clientState.game.turnScoreHi = (uint8_t)(1500 >> 8);
-  clientState.game.turnScoreLo = (uint8_t)(1500 & 0xFF);
+  setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 1500);
   strcpy(clientState.game.prompt, "your turn");
   poll("HOT DICE - fresh six granted");
   poll("hot dice, next poll");
 
   clientState.game.activePlayer = 1;
   clientState.game.validMoves = 0;
-  clientState.game.turnScoreHi = clientState.game.turnScoreLo = 0;
+  setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 0);
   clientState.game.moveTime = 40;
   strcpy(clientState.game.dice, "612534");
   strcpy(clientState.game.keptDice, "");
