@@ -152,7 +152,13 @@ void showHelpScreen() {
   hy++;
   helpLn(5, "EACH 1 SET ASIDE - 100 POINTS");
   helpLn(5, "EACH 5 SET ASIDE - 50 POINTS");
+  // A 24 row screen is one short here, and would land the last line on the
+  // status row, so it gives up a gap.
+  #if HEIGHT < 25
+  hy++;centerTextAlt(hy, "sets");
+  #else
   hy+=2;centerTextAlt(hy, "sets");
+  #endif
   hy++;
   helpLn(4, "three OF A KIND - FACE VALUE x 100");
   helpLn(4, "  EXCEPT three 1s, WHICH SCORE 1000");

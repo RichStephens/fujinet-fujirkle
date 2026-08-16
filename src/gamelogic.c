@@ -79,7 +79,10 @@ typedef char assert_game_is_header_plus_players[
 #define DIE_ROLL 18   // plain face; 14-16 carry a rolls-remaining mark
 #define DIE_BANK 17
 
+// A shorter screen trades the panel's one blank row for the strip below it
+#ifndef PANEL_H
 #define PANEL_H  9
+#endif
 #define KEPT_PER_ROW 3
 
 #define STATUS_Y (BOARD_TOP + PANEL_H + 2)

@@ -1,6 +1,6 @@
 PRODUCT = fujirkle
 PRODUCT_UPPER = FUJIRKLE
-PLATFORMS = coco msdos atari
+PLATFORMS = coco msdos atari apple2
 
 # CoCo targets:
 #   make coco        → CoCo 1/2 build
@@ -24,6 +24,9 @@ FUJINET_LIB =
 ifeq ($(PLATFORM),msdos)
   FUJINET_LIB = https://github.com/FozzTexx/fujinet-lib-experimental.git
 endif
+
+# Apple II: custom HGR-aware linker config
+LDFLAGS_EXTRA_APPLE2 += -C src/apple2/apple2-hgr.cfg
 
 # CoCo: optimization + memory layout
 CFLAGS_EXTRA_COCO  += -fomit-frame-pointer -O2 -Wno-const
