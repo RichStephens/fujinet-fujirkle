@@ -1,6 +1,6 @@
 PRODUCT = fujirkle
 PRODUCT_UPPER = FUJIRKLE
-PLATFORMS = coco msdos
+PLATFORMS = coco msdos atari
 
 # CoCo targets:
 #   make coco        → CoCo 1/2 build

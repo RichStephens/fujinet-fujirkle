@@ -13,6 +13,7 @@
 // ported. Each is guarded by its own compiler macro, so all are safe to include.
 #include "../coco/vars.h"
 #include "../msdos/vars.h"
+#include "../atari/vars.h"
 
 // The board layout switches on WIDTH. An undefined WIDTH would evaluate to 0 in
 // the #if and silently pick the narrow layout, so fail loudly instead.

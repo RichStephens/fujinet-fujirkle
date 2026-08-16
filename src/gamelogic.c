@@ -36,7 +36,11 @@ typedef char assert_game_is_header_plus_players[
 // Two layouts, chosen by width rather than by model: 40 columns gets the split
 // strip with 3x3 button tiles, 32 the tighter one with vertical words.
 #if WIDTH >= 40
+// A taller screen sets its own DICE_Y to keep the same two rows beneath the
+// box. Everything below derives from it.
+#ifndef DICE_Y
 #define DICE_Y   18
+#endif
 #define BTN_ROLL_X 4
 #define BTN_BANK_X 8
 #define DICE_X   14
@@ -46,7 +50,10 @@ typedef char assert_game_is_header_plus_players[
 #define STRIP_WALL   12
 #define STRIP_RIGHT  38
 #define STRIP_H      5
+// Tracks DICE_Y - the prompt sits directly above the box
+#ifndef PROMPT_Y
 #define PROMPT_Y 15
+#endif
 #define HINT_Y   (HEIGHT - 2)
 #else
 // All 32 columns are spoken for: border, 4 button cells, wall, 23 dice, 2
@@ -87,7 +94,7 @@ typedef char assert_game_is_header_plus_players[
 #define CUR_BANK  (NUM_DICE + 1)
 #define CUR_COUNT (NUM_DICE + 2)
 
-static int8_t cursor;
+static int8_t curSel;
 static char   selMask[NUM_DICE + 1];
 static bool   cursorShown;
 
@@ -293,8 +300,8 @@ static void clearDiceArea() {
 
 static void drawButtons() {
 #if WIDTH >= 40
-  drawDie(BTN_ROLL_X, DICE_Y, DIE_ROLL, 0, btnLit && cursor == CUR_ROLL);
-  drawDie(BTN_BANK_X, DICE_Y, DIE_BANK, 0, btnLit && cursor == CUR_BANK);
+  drawDie(BTN_ROLL_X, DICE_Y, DIE_ROLL, 0, btnLit && curSel == CUR_ROLL);
+  drawDie(BTN_BANK_X, DICE_Y, DIE_BANK, 0, btnLit && curSel == CUR_BANK);
 #else
   // No room for 3x3 tiles beside six dice, so vertical words instead, unframed
   // inside the strip box. Selection shows as a color change.
@@ -302,8 +309,8 @@ static void drawButtons() {
     static unsigned char bi;
 
     for (bi = 0; bi < 4; bi++) {
-      drawChar(BTN_ROLL_X, BTN_Y + bi, "roll"[bi], btnLit && cursor == CUR_ROLL);
-      drawChar(BTN_BANK_X, BTN_Y + bi, "bank"[bi], btnLit && cursor == CUR_BANK);
+      drawChar(BTN_ROLL_X, BTN_Y + bi, "roll"[bi], btnLit && curSel == CUR_ROLL);
+      drawChar(BTN_BANK_X, BTN_Y + bi, "bank"[bi], btnLit && curSel == CUR_BANK);
     }
   }
 #endif
@@ -311,8 +318,8 @@ static void drawButtons() {
 
 static void showCursor() {
   btnLit = true;
-  if (cursor < NUM_DICE) {
-    drawDiceCursor(cursorX(cursor));
+  if (curSel < NUM_DICE) {
+    drawDiceCursor(cursorX(curSel));
     cursorShown = true;
   } else {
     drawButtons();
@@ -322,7 +329,7 @@ static void showCursor() {
 
 static void hideCursor() {
   if (cursorShown) {
-    hideDiceCursor(cursorX(cursor));
+    hideDiceCursor(cursorX(curSel));
     cursorShown = false;
   }
 }
@@ -716,7 +723,7 @@ void processStateChange() {
     state.prevRound = game.round;
     state.prevPlayerCount = game.playerCount;
     clearSelection();
-    cursor = 0;
+    curSel = 0;
   }
 
   // The dice changed, so the server rolled for us - animate them
@@ -729,8 +736,8 @@ void processStateChange() {
     // Our move came back, so waitOnPlayerMove may take the player again
     state.playerMadeMove = false;
 
-    if (cursor < NUM_DICE && cursor >= (int8_t)strlen(game.dice))
-      cursor = 0;
+    if (curSel < NUM_DICE && curSel >= (int8_t)strlen(game.dice))
+      curSel = 0;
 
     // Hot dice: a full pool with points held and nothing set aside, which
     // cannot happen at the start of a turn
@@ -805,7 +812,7 @@ void processStateChange() {
   // A fresh turn, so the player is free to move again even if the dice happened
   // to come back identical to the last roll
   if (isMyTurn() && !wasMyTurn) {
-    cursor = 0;
+    curSel = 0;
     state.playerMadeMove = false;
     soundMyTurn();
 
@@ -1034,7 +1041,7 @@ void waitOnPlayerMove() {
 
     // Skip die positions no longer in the pool
     if (input.dirX) {
-      next = cursor;
+      next = curSel;
       do {
         next += input.dirX;
         if (next < 0)
@@ -1044,8 +1051,8 @@ void waitOnPlayerMove() {
       } while (next < NUM_DICE && next >= (int8_t)strlen(game.dice));
 
       hideCursor();
-      cursor = next;
-      if (cursor >= NUM_DICE)
+      curSel = next;
+      if (curSel >= NUM_DICE)
         soundScoreCursor();
       else
         soundCursor();
@@ -1059,9 +1066,9 @@ void waitOnPlayerMove() {
     if (input.dirY) {
       next = input.dirY < 0 ? CUR_ROLL : CUR_BANK;
 
-      if (next != cursor) {
+      if (next != curSel) {
         hideCursor();
-        cursor = next;
+        curSel = next;
         soundScoreCursor();
         btnLit = true;
         showCursor();
@@ -1069,16 +1076,16 @@ void waitOnPlayerMove() {
     }
 
     if (input.trigger || input.key == KEY_SPACEBAR || input.key == KEY_RETURN) {
-      if (cursor == CUR_ROLL || cursor == CUR_BANK) {
+      if (curSel == CUR_ROLL || curSel == CUR_BANK) {
         // Nothing selected is not a move - stay on the player
-        if (sendSelection(cursor == CUR_BANK)) {
+        if (sendSelection(curSel == CUR_BANK)) {
           state.playerMadeMove = true;
           return;
         }
-      } else if (dieSelectable(cursor)) {
+      } else if (dieSelectable(curSel)) {
         // Toggle this die in or out of the set aside pile
-        selMask[cursor] = selMask[cursor] == '1' ? '0' : '1';
-        if (selMask[cursor] == '1')
+        selMask[curSel] = selMask[curSel] == '1' ? '0' : '1';
+        if (selMask[curSel] == '1')
           soundKeep();
         else
           soundRelease();
