@@ -1,4 +1,3 @@
-#ifndef LAYOUT_DEMO
 #include <stdlib.h>
 #include "stateclient.h"
 #include "screens.h"
@@ -777,4 +776,3 @@ void showInGameMenuScreen() {
 
 
 
-#endif /* LAYOUT_DEMO */

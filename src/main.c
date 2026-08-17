@@ -43,20 +43,9 @@ uint16_t maxJifs;
 unsigned char h, i, j, k, x, y;
 char tempBuffer[128];
 
-#ifdef LAYOUT_DEMO
-extern void runLayoutDemo(void);
-#endif
-
 int main(void)
 {
   uint8_t failedApiCalls=0;
-
-#ifdef LAYOUT_DEMO
-  initGraphics();
-  runLayoutDemo();
-#endif
-
-#ifndef LAYOUT_DEMO
 
 #ifdef COCO3
   loadPrefs(); // color mode must be known before initGraphics prompts
@@ -121,7 +110,6 @@ int main(void)
 
     processInput();
   }
-#endif /* LAYOUT_DEMO */
 
   return 0;
 }

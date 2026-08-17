@@ -1,5 +1,3 @@
-#ifndef LAYOUT_DEMO
-
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -1244,4 +1242,3 @@ bool inputFieldCycle(uint8_t x, uint8_t y, uint8_t max, char* buffer) {
   return false;
 }
 
-#endif /* LAYOUT_DEMO */
