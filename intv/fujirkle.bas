@@ -11,6 +11,7 @@
     GOTO boot_start
 
     INCLUDE "constants.bas"
+    INCLUDE "input.bas"
 
     ' ROWCELLS/STATUS_ROW/PROMPT_ROW must be declared before the includes
     ' below: the compiler resolves CONST symbols at parse time (unlike
@@ -73,7 +74,6 @@ lit_abin: DATA 38,98,105,110,61,49
     DIM ne_buf(8)
     DIM ak_try
     DIM #tbl_count, tbl_sel
-    DIM inp_lock
     DIM want_leave, im_sel
     DIM hs_i, hs_page
     DIM url_path
@@ -85,7 +85,7 @@ lit_abin: DATA 38,98,105,110,61,49
     DIM #cur_round, #cur_pc, prev_round, prev_active, prev_seen_pc, my_turn
     DIM poll_wait, has_action
     DIM turn_changed, roll_changed, shadow_seeded, pc_changed
-    DIM fujirkle_fired, fj_now, bank_seen, lb_held
+    DIM fujirkle_fired, fj_now, bank_seen
     DIM mask_len, pt_i, ti_any, ti_framecount, #ti_timeleft
     DIM #hdr_t, #lb_pc
 
@@ -304,6 +304,7 @@ table_select:
     inp_lock = 0
 ts_input:
     WAIT
+    GOSUB read_input
     FOR gs_i = 0 TO #tbl_count - 1
         #gs_c = COL_TEXT
         IF gs_i = tbl_sel THEN #gs_c = COL_HILITE
@@ -312,21 +313,21 @@ ts_input:
 
     IF inp_lock > 0 THEN inp_lock = inp_lock - 1 : GOTO ts_input
 
-    IF CONT1.DOWN THEN
+    IF inp_dir AND DISC_DOWN THEN
         tbl_sel = tbl_sel + 1
         IF tbl_sel >= #tbl_count THEN tbl_sel = 0
         inp_lock = 8
         GOSUB sound_cursor
         GOTO ts_input
     END IF
-    IF CONT1.UP THEN
+    IF inp_dir AND DISC_UP THEN
         IF tbl_sel = 0 THEN tbl_sel = #tbl_count
         tbl_sel = tbl_sel - 1
         inp_lock = 8
         GOSUB sound_cursor
         GOTO ts_input
     END IF
-    IF CONT1.BUTTON = 0 THEN GOTO ts_input
+    IF inp_btn_hit = 0 THEN GOTO ts_input
     GOSUB sound_select
 
     #tmp_addr = table_addr(tbl_sel)
@@ -353,11 +354,11 @@ table_joined:
     want_leave = 0
     has_action = 0
     dice_cur = 0
-    lb_held = 1 ' the button press that picked the table may still be down
     GOSUB sound_join
 
 game_loop:
     WAIT
+    GOSUB read_input
 
     IF poll_wait > 0 THEN
         poll_wait = poll_wait - 1
@@ -577,23 +578,19 @@ gl_input:
     ' Lobby ready-toggle lives here (sampled every frame) rather than in
     ' render_lobby (sampled only once per 45-frame poll, where a quick tap
     ' between polls would be missed): a fresh press queues has_action=1,
-    ' and the next loop pass sends /ready in place of /state. lb_held
-    ' requires a release between toggles so one press can't ready and
-    ' un-ready across two polls.
+    ' and the next loop pass sends /ready in place of /state. inp_btn_hit
+    ' is an edge, so a release is required between toggles -- one press
+    ' can't ready and un-ready across two polls, and the button that picked
+    ' the table can't toggle ready on arrival while it's still held.
     IF #cur_round = ROUND_LOBBY THEN
-        IF CONT1.BUTTON THEN
-            IF lb_held = 0 THEN
-                lb_held = 1
-                GOSUB sound_select
-                has_action = 1
-                poll_wait = 0
-            END IF
-        ELSE
-            lb_held = 0
+        IF inp_btn_hit THEN
+            GOSUB sound_select
+            has_action = 1
+            poll_wait = 0
         END IF
     END IF
 
-    IF CONT1.KEY = 10 THEN GOSUB ingame_menu
+    IF inp_key_hit = 10 THEN GOSUB ingame_menu
     IF want_leave THEN
         want_leave = 0
         GOTO table_select
@@ -726,6 +723,7 @@ turn_input: PROCEDURE
 
 ti_loop:
     WAIT
+    GOSUB read_input
 
     ti_framecount = ti_framecount + 1
     IF ti_framecount >= 60 THEN
@@ -743,17 +741,13 @@ ti_loop:
 
     IF inp_lock > 0 THEN inp_lock = inp_lock - 1 : GOTO ti_loop
 
-    IF CONT1.KEY = 10 THEN
+    IF inp_key_hit = 10 THEN
         GOSUB ingame_menu
         IF want_leave THEN RETURN
         GOTO ti_loop
     END IF
 
-    ' Disc before BUTTON deliberately: the three action-button signals
-    ' share overlapping bits (constants.bas's BUTTON_MASK), so
-    ' CONT1.BUTTON reads non-zero for any side button; the disc directions
-    ' are distinct signals and must be given first refusal.
-    IF CONT1.RIGHT THEN
+    IF inp_dir AND DISC_RIGHT THEN
         dice_cur = (dice_cur + 1) % 8
         ' Skip pool slots that no longer hold a die (the pool shrinks from
         ' the right as dice are set aside).
@@ -768,7 +762,7 @@ ti_skip_fwd:
         dr_cursor = dice_cur : GOSUB draw_pool_row
         GOTO ti_loop
     END IF
-    IF CONT1.LEFT THEN
+    IF inp_dir AND DISC_LEFT THEN
         dice_cur = (dice_cur + 7) % 8
 ti_skip_back:
         IF dice_cur < 6 THEN
@@ -785,20 +779,20 @@ ti_skip_back:
         dr_cursor = dice_cur : GOSUB draw_pool_row
         GOTO ti_loop
     END IF
-    IF CONT1.UP THEN
+    IF inp_dir AND DISC_UP THEN
         dice_cur = 6 ' jump straight to ROLL
         inp_lock = 8 : GOSUB sound_cursor
         dr_cursor = dice_cur : GOSUB draw_pool_row
         GOTO ti_loop
     END IF
-    IF CONT1.DOWN THEN
+    IF inp_dir AND DISC_DOWN THEN
         dice_cur = 7 ' jump straight to BANK
         inp_lock = 8 : GOSUB sound_cursor
         dr_cursor = dice_cur : GOSUB draw_pool_row
         GOTO ti_loop
     END IF
 
-    IF CONT1.BUTTON = 0 THEN GOTO ti_loop
+    IF inp_btn_hit = 0 THEN GOTO ti_loop
 
     IF dice_cur < 6 THEN
         ' On a die -- toggle it in/out of the keep mask, but only if the
@@ -966,16 +960,9 @@ END
 ingame_menu: PROCEDURE
     im_sel = 0
     inp_lock = 0
-    ' Wait for the CLEAR press that opened the menu to release before
-    ' accepting any input. Without this, the same still-held key
-    ' immediately satisfies "IF CONT1.KEY = 10 THEN GOTO im_done" below on
-    ' the very first frame, closing the menu the instant it opens -- the
-    ' manual's own advice ("it's suggested to wait for CONT1.KEY to
-    ' contain 12 before waiting for a key") for exactly this reason.
-im_wait_release:
-    WAIT
-    IF CONT1.KEY <> 12 THEN GOTO im_wait_release
-
+    ' No wait-for-release needed on entry: input.bas's inp_key_hit is an
+    ' edge, so the still-held CLEAR that opened this menu can't also satisfy
+    ' the "Clear again cancels" test below on the opening frame.
 im_loop:
     ' Blank pass and text pass share one frame -- this loop repaints every
     ' frame the menu is up, so a WAIT between the two passes would flash
@@ -998,27 +985,28 @@ im_loop:
     PRINT AT STATUS_ROW COLOR #gs_c, "QUIT TABLE"
 
     WAIT
+    GOSUB read_input
     IF inp_lock > 0 THEN inp_lock = inp_lock - 1 : GOTO im_loop
 
     ' Wraps rather than clamps, matching every other cursor in the game
     ' (ne_cur, dice_cur, tbl_sel). The "IF im_sel = 0 THEN im_sel = 3"
     ' idiom before decrementing avoids unsigned underflow.
-    IF CONT1.DOWN THEN
+    IF inp_dir AND DISC_DOWN THEN
         im_sel = im_sel + 1
         IF im_sel > 2 THEN im_sel = 0
         inp_lock = 10
         GOSUB sound_cursor
         GOTO im_loop
     END IF
-    IF CONT1.UP THEN
+    IF inp_dir AND DISC_UP THEN
         IF im_sel = 0 THEN im_sel = 3
         im_sel = im_sel - 1
         inp_lock = 10
         GOSUB sound_cursor
         GOTO im_loop
     END IF
-    IF CONT1.KEY = 10 THEN GOTO im_done
-    IF CONT1.BUTTON = 0 THEN GOTO im_loop
+    IF inp_key_hit = 10 THEN GOTO im_done
+    IF inp_btn_hit = 0 THEN GOTO im_loop
     GOSUB sound_select
 
     IF im_sel = 1 THEN
@@ -1039,18 +1027,10 @@ im_loop:
 im_done:
     ' Redraw the whole screen immediately -- not just next poll. See
     ' restore_screen's own comment for why this is needed here.
-    IF want_leave = 0 THEN
-        GOSUB restore_screen
-        ' Don't hand a still-held button/key back to the caller: ti_loop
-        ' reads CONT1.BUTTON as keep/roll/bank and gl_input reads BUTTON
-        ' as the lobby ready toggle, so confirming RESUME (or dismissing
-        ' HELP) with the button/key still down past restore_screen's ~14
-        ' frames would otherwise fire an unintended action immediately.
-im_exit_release:
-        WAIT
-        IF CONT1.BUTTON THEN GOTO im_exit_release
-        IF CONT1.KEY <> 12 THEN GOTO im_exit_release
-    END IF
+    ' A still-held button or key is safe to hand back to the caller now:
+    ' ti_loop and gl_input both read the inp_*_hit edges, so nothing fires
+    ' again until the player actually releases and presses anew.
+    IF want_leave = 0 THEN GOSUB restore_screen
 END
 
 ' ===========================================================================
@@ -1110,27 +1090,21 @@ hs_draw:
         PRINT AT STATUS_ROW COLOR COL_TEXT, "DISC L=BACK BTN=GAME"
     END IF
 
-    ' The button press that picked HELP out of the menu is still held here
-    ' -- without this the first frame of hs_input would read it as "any
-    ' button" and dismiss the screen instantly. Runs again after each page
-    ' flip, where it's a harmless no-op (the disc isn't checked here).
-hs_release:
-    WAIT
-    IF CONT1.BUTTON THEN GOTO hs_release
-    IF CONT1.KEY <> 12 THEN GOTO hs_release
     inp_lock = 0
 
 hs_input:
     WAIT
+    GOSUB read_input
     IF inp_lock > 0 THEN inp_lock = inp_lock - 1 : GOTO hs_input
-    ' Any of the three side buttons dismisses (CONT1.BUTTON is true for
-    ' all three), as does any keypad key.
-    IF CONT1.BUTTON THEN GOTO hs_done
-    IF CONT1.KEY <> 12 THEN GOTO hs_done
-    IF CONT1.RIGHT AND hs_page = 0 THEN
+    ' Any of the three side buttons dismisses, as does any keypad key. Both
+    ' are edges, so the button press that picked HELP out of the menu --
+    ' still held on the first frame here -- can't dismiss it instantly.
+    IF inp_btn_hit THEN GOTO hs_done
+    IF inp_key_hit <> 12 THEN GOTO hs_done
+    IF (inp_dir AND DISC_RIGHT) AND hs_page = 0 THEN
         hs_page = 1 : inp_lock = 10 : GOSUB sound_cursor : GOTO hs_draw
     END IF
-    IF CONT1.LEFT AND hs_page = 1 THEN
+    IF (inp_dir AND DISC_LEFT) AND hs_page = 1 THEN
         hs_page = 0 : inp_lock = 10 : GOSUB sound_cursor : GOTO hs_draw
     END IF
     GOTO hs_input
@@ -1170,37 +1144,38 @@ ne_loop:
     NEXT ne_i
 
     WAIT
+    GOSUB read_input
     IF inp_lock > 0 THEN inp_lock = inp_lock - 1 : GOTO ne_loop
 
-    IF CONT1.RIGHT THEN
+    IF inp_dir AND DISC_RIGHT THEN
         ne_cur = ne_cur + 1
         IF ne_cur > 7 THEN ne_cur = 0
         inp_lock = 8
         GOSUB sound_cursor
         GOTO ne_loop
     END IF
-    IF CONT1.LEFT THEN
+    IF inp_dir AND DISC_LEFT THEN
         IF ne_cur = 0 THEN ne_cur = 8
         ne_cur = ne_cur - 1
         inp_lock = 8
         GOSUB sound_cursor
         GOTO ne_loop
     END IF
-    IF CONT1.UP THEN
+    IF inp_dir AND DISC_UP THEN
         ne_buf(ne_cur) = ne_buf(ne_cur) + 1
         IF ne_buf(ne_cur) > 36 THEN ne_buf(ne_cur) = 0
         inp_lock = 6
         GOSUB sound_cursor
         GOTO ne_loop
     END IF
-    IF CONT1.DOWN THEN
+    IF inp_dir AND DISC_DOWN THEN
         IF ne_buf(ne_cur) = 0 THEN ne_buf(ne_cur) = 37
         ne_buf(ne_cur) = ne_buf(ne_cur) - 1
         inp_lock = 6
         GOSUB sound_cursor
         GOTO ne_loop
     END IF
-    IF CONT1.BUTTON = 0 THEN GOTO ne_loop
+    IF inp_btn_hit = 0 THEN GOTO ne_loop
     GOSUB sound_select
 
     ne_len = 8
