@@ -83,6 +83,7 @@ lit_abin: DATA 38,98,105,110,61,49
     DIM sp_i, sp_found, sp_ok, sp_j, sp_k, sp_c, sp_valid, sp_m
 
     DIM #cur_round, #cur_pc, prev_round, prev_active, prev_seen_pc, my_turn
+    DIM my_turn_cue
     DIM poll_wait, has_action
     DIM turn_changed, roll_changed, shadow_seeded, pc_changed
     DIM fujirkle_fired, fj_now, bank_seen
@@ -444,10 +445,35 @@ game_loop:
         ' .lst: it never called turn_input. The validmoves gate is what
         ' keeps us out of turn_input during the server's 3-second
         ' FUJIRKLE hold (activePlayer stays 0 there but validMoves is 0).
-        my_turn = 0
+        '
+        ' Two gates, not one: my_turn_cue is "the turn is mine", my_turn is
+        ' "...and there's something to do with it". The server's automatic
+        ' opening roll can bust immediately, which zeroes validMoves in the
+        ' very poll the turn arrives -- gating the sound on my_turn would
+        ' leave exactly the turns you most want announced silent, so the
+        ' cue uses my_turn_cue and only turn_input keeps the stricter gate.
+        my_turn_cue = 0
         IF active_player = 0 THEN
-            IF state_viewing = 0 THEN
-                IF state_validmoves <> 0 THEN my_turn = 1
+            IF state_viewing = 0 THEN my_turn_cue = 1
+        END IF
+        my_turn = 0
+        IF my_turn_cue = 1 THEN
+            IF state_validmoves <> 0 THEN my_turn = 1
+        END IF
+
+        ' Announced here, above the roll animation and the bust sting below,
+        ' so a busted-on-arrival turn plays "your turn" then the sting
+        ' rather than the other way round. The dice cursor/keep-mask reset
+        ' stays on my_turn: there's nothing to select during a bust hold,
+        ' and roll_changed (which turn_changed forces on) redoes it anyway,
+        ' clamping the cursor into the new pool more carefully than this.
+        IF turn_changed THEN
+            IF my_turn_cue THEN GOSUB sound_myturn
+            IF my_turn THEN
+                dice_cur = 0
+                FOR pt_i = 0 TO 5
+                    POKE (SC_KEEP + pt_i), 48
+                NEXT pt_i
             END IF
         END IF
 
@@ -551,16 +577,6 @@ game_loop:
             POKE (SC_PREVSCORES + pt_i * 2 + 1), (#gs_char / 256) AND 255
         NEXT pt_i
         shadow_seeded = 1
-
-        IF turn_changed THEN
-            IF my_turn THEN
-                GOSUB sound_myturn
-                dice_cur = 0
-                FOR pt_i = 0 TO 5
-                    POKE (SC_KEEP + pt_i), 48
-                NEXT pt_i
-            END IF
-        END IF
 
         GOSUB render_playscreen
 
