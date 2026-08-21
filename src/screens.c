@@ -195,7 +195,12 @@ void welcomeActionVerifyServerDetails() {
       if (tempBuffer[i]=='?') {
         strcpy(query, tempBuffer+i);
         tempBuffer[i]=0;
-        strcpy(serverEndpoint, tempBuffer);
+
+        // The table still comes from the lobby, but the server does not once
+        // the debug flag has pointed us at localhost
+        if (prefs.debugFlag != 0xFF)
+          strcpy(serverEndpoint, tempBuffer);
+
         break;
       }
     }

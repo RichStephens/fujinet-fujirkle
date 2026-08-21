@@ -31,6 +31,9 @@
 #define MOVE_ROLL 1
 #define MOVE_BANK 2
 
+// Wire status bits - what just happened, rather than inferred from the prompt
+#define STATUS_FUJIRKLE 1
+
 // player.ready
 #define READY_VIEWING (-2)
 #define READY_UNSET   0
@@ -91,12 +94,12 @@ typedef struct {
 } Tables;
 
 // This must match serializeResults() in the server byte for byte. The header is
-// 98 bytes and each player adds 13, so a two player state is 124 bytes.
+// 99 bytes and each player adds 13, so a two player state is 125 bytes.
 //
 // As with Player, every member is byte sized so no compiler can pad it.
 //
 //   1  playerCount        21 serverName      41 prompt
-//   5  round, activePlayer, moveTime, viewing, validMoves
+//   6  round, activePlayer, moveTime, viewing, validMoves, status
 //   2  turnScore          7  dice            7  keptDice
 //   7  selectable         7  keepRoll
 //
@@ -111,6 +114,7 @@ typedef struct {
   uint8_t moveTime;
   uint8_t viewing;
   uint8_t validMoves;   // MOVE_ROLL | MOVE_BANK
+  uint8_t status;       // STATUS_FUJIRKLE
   uint8_t turnScore0;   // points held this turn, lost on a no-score roll
   uint8_t turnScore1;
   char dice       [7];  // the pool still in play

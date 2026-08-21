@@ -56,12 +56,11 @@ static int inStrip(unsigned char cy) { return cy >= L_DICE_Y - 2 && cy <= L_DICE
 //////////////////////////////////////////////////////////////////////////////
 
 void drawDie(unsigned char dx, unsigned char dy, unsigned char s, bool sel, bool hi) {
-  (void)hi;
   if (inStrip(dy)) {
     if (dx >= L_DICE_X)
       LOG("drawDie      strip col %2u face %u%s", dx, s, sel ? " (kept)" : "");
     else
-      LOG("drawDie      button col %2u face %u", dx, s);
+      LOG("drawDie      button col %2u face %u%s", dx, s, hi ? "  <<LIT>>" : "");
   }
 }
 
@@ -70,6 +69,7 @@ void drawDieSpace(unsigned char dx, unsigned char dy) {
 }
 
 void drawSpace(unsigned char sx, unsigned char sy, unsigned char w) {
+  if (sy == 15) LOG("PROMPT ROW: <blank>");
   if (inStrip(sy)) LOG("drawSpace    strip col %2u w %u", sx, w);
 }
 
@@ -135,8 +135,10 @@ void pause(unsigned char f) { (void)f; }
 void readCommonInput(void) { input.key = 0; input.trigger = false; input.dirX = input.dirY = 0; }
 void clearCommonInput(void) { readCommonInput(); }
 
-void resetTimer(void) {}
-uint16_t getTime(void) { return 0; }
+// Advances so timed holds actually expire here the way they do on hardware
+static uint16_t hostJiffies = 0;
+void resetTimer(void) { hostJiffies = 0; }
+uint16_t getTime(void) { return hostJiffies += 4; }
 void quit(void) {}
 void housekeeping(void) {}
 uint8_t getJiffiesPerSecond(void) { return 60; }
@@ -247,9 +249,11 @@ int main(void) {
   strcpy(clientState.game.selectable, "000000");
   clientState.game.validMoves = 0;
   strcpy(clientState.game.prompt, "fujirkle! no score");
+  clientState.game.status = STATUS_FUJIRKLE;
   poll("FUJIRKLE - the losing roll arrives");
 
   clientState.game.moveTime = 3; poll("fujirkle held (1)");
+  clientState.game.status = 0;
   clientState.game.moveTime = 2; poll("fujirkle held (2)");
   clientState.game.moveTime = 1; poll("fujirkle held (3)");
 
@@ -263,6 +267,36 @@ int main(void) {
   setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 0);
   strcpy(clientState.game.prompt, "1ai bob rolling");
   poll("TURN PASSES after fujirkle");
+
+  // --- A bot's move: the server has already committed its pick and re-rolled,
+  // --- so the pick only reaches us as keepRoll over the dice we had before.
+  clientState.game.activePlayer = 1;
+  clientState.game.validMoves = 0;
+  strcpy(clientState.game.dice, "24");
+  strcpy(clientState.game.keptDice, "1155");
+  strcpy(clientState.game.selectable, "000000");
+  strcpy(clientState.game.keepRoll, "1010");
+  strcpy(clientState.game.prompt, "1ai clyd rolling");
+  poll("BOT PICK - keepRoll 1010 over the previous dice");
+
+  // --- The next pick carries the SAME mask. Deduping on the mask alone swallowed
+  // --- this one, which is why bank markers went missing now and then.
+  strcpy(clientState.game.dice, "35");
+  strcpy(clientState.game.keptDice, "1155");
+  strcpy(clientState.game.keepRoll, "1010");
+  poll("SAME MASK AGAIN - must still replay");
+
+  // --- A bot banks and the turn comes to US. validMoves is already set, so a
+  // --- guard on isMyTurn() would have thrown this pick away.
+  clientState.game.activePlayer = 0;
+  clientState.game.validMoves = MOVE_ROLL | MOVE_BANK;
+  strcpy(clientState.game.dice, "142536");
+  strcpy(clientState.game.keptDice, "");
+  strcpy(clientState.game.keepRoll, "0101");
+  strcpy(clientState.game.prompt, "your turn");
+  poll("BOT BANKS INTO OUR TURN - pick must still replay");
+
+  strcpy(clientState.game.keepRoll, "");
 
   // --- Hot dice: every die set aside, so the server grants a fresh six and
   // --- clears KeptDice while the turn score carries over
@@ -285,6 +319,26 @@ int main(void) {
   strcpy(clientState.game.selectable, "100010");
   strcpy(clientState.game.prompt, "1ai clyd's turn");
   poll("next player's opening roll");
+
+  // A bot's hot dice: the banner belongs to the pick that earned it and must
+  // survive the pause showing it, then give way to their name before the fresh
+  // six tumble - not to the next player's name, since the turn has not moved.
+  clientState.game.activePlayer = 1;
+  clientState.game.validMoves = 0;
+  strcpy(clientState.game.prompt, "1ai clyd's turn");
+  poll("bot's turn opens");
+
+  strcpy(clientState.game.dice, "1155");
+  strcpy(clientState.game.keepRoll, "");
+  poll("bot mid-turn");
+
+  strcpy(clientState.game.keepRoll, "1111");
+  strcpy(clientState.game.dice, "162534");
+  strcpy(clientState.game.keptDice, "");
+  setWireWord(&clientState.game.turnScore0, &clientState.game.turnScore1, 800);
+  strcpy(clientState.game.prompt, "hot dice! roll all six again");
+  poll("BOT HOT DICE - picked every die");
+  poll("bot hot dice, held");
 
   printf("\n");
   return 0;

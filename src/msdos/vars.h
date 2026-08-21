@@ -11,6 +11,10 @@
 // is paced by the sound alone.
 #define ROLL_SOUND_MOD 1
 #define ROLL_FRAMES 16
+// The clatter blocks, so its length sets the tumble rate. Slow the roll here,
+// not with ROLL_FRAMES, which only makes it run longer at the same speed.
+#define ROLL_TONE_MS 25
+#define ROLL_GAP_MS  6
 // waitvsync here is a PIT read, so it is safe to pace every animation frame on
 // it. Without it only the frames that happen to make a sound are paced, and the
 // tumble is over before it can be seen.

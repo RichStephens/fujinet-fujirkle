@@ -141,17 +141,19 @@ void soundGameDone()
  * taken from the law above - that was fitted over periods 0-132 and the roll
  * reaches 233, where extending it predicts 3200Hz against a real ~1070.
  *
- * The CoCo's roll is a rattle rather than tones. Driving the speaker bit
- * directly with the timer gated off would give that, but is silent under QEMU,
- * which renders the speaker from the PIT output alone. */
+ * The CoCo's roll is a rattle rather than tones, and there is no way to get one
+ * here - the speaker has no noise source. Shortening these bursts to the CoCo's
+ * 11ms was tried on real hardware and is indistinguishable from 25ms, so burst
+ * length is not the difference. Driving the speaker bit with the timer gated off
+ * gives nothing either: the speaker is (data bit AND timer output). */
 void soundRollDice()
 {
     unsigned char r;
 
     r = (unsigned char)(rand() % 20);
-    beep((unsigned int)(10000000UL / (25000UL - 850UL * r)), 11, 4);
+    beep((unsigned int)(10000000UL / (25000UL - 850UL * r)), ROLL_TONE_MS, ROLL_GAP_MS);
     r = (unsigned char)(rand() % 20);
-    beep((unsigned int)(10000000UL / (25000UL - 850UL * r)), 11, 0);
+    beep((unsigned int)(10000000UL / (25000UL - 850UL * r)), ROLL_TONE_MS, 0);
 }
 
 void soundRollButton()
@@ -162,43 +164,43 @@ void soundRollButton()
 
 void soundCursor()
 {
-    beep(341, 11, 0);         /* tone(0,0,0) */
-    beep(341, 11, 0);         /* tone(0,0,0) */
-    beep(341, 11, 0);         /* tone(0,0,0) */
+    beep(341, 20, 0);         /* tone(0,0,0) */
+    beep(341, 20, 0);         /* tone(0,0,0) */
+    beep(341, 20, 0);         /* tone(0,0,0) */
 }
 
 void soundScoreCursor()
 {
-    beep(386, 11, 0);         /* tone(30,0,0) */
-    beep(386, 11, 0);         /* tone(30,0,0) */
-    beep(386, 11, 0);         /* tone(30,0,0) */
+    beep(386, 20, 0);         /* tone(30,0,0) */
+    beep(386, 20, 0);         /* tone(30,0,0) */
+    beep(386, 20, 0);         /* tone(30,0,0) */
 }
 
 void soundTick()
 {
-    beep(341, 11, 0);         /* tone(0,0,0) */
+    beep(341, 20, 0);         /* tone(0,0,0) */
 }
 
 void soundKeep()
 {
-    beep(352, 11, 0);         /* tone(8,0,0) */
-    beep(371, 11, 0);         /* tone(21,0,0) */
-    beep(393, 11, 0);         /* tone(34,0,0) */
-    beep(416, 11, 0);         /* tone(47,0,0) */
-    beep(443, 11, 0);         /* tone(60,0,0) */
-    beep(474, 11, 0);         /* tone(73,0,0) */
-    beep(509, 11, 0);         /* tone(86,0,0) */
-    beep(550, 11, 0);         /* tone(99,0,0) */
-    beep(358, 11, 0);         /* tone(12,0,0) */
-    beep(378, 11, 0);         /* tone(25,0,0) */
+    beep(352, 20, 0);         /* tone(8,0,0) */
+    beep(371, 20, 0);         /* tone(21,0,0) */
+    beep(393, 20, 0);         /* tone(34,0,0) */
+    beep(416, 20, 0);         /* tone(47,0,0) */
+    beep(443, 20, 0);         /* tone(60,0,0) */
+    beep(474, 20, 0);         /* tone(73,0,0) */
+    beep(509, 20, 0);         /* tone(86,0,0) */
+    beep(550, 20, 0);         /* tone(99,0,0) */
+    beep(358, 20, 0);         /* tone(12,0,0) */
+    beep(378, 20, 0);         /* tone(25,0,0) */
 }
 
 void soundRelease()
 {
-    beep(355, 11, 1);         /* tone(10,0,1) */
-    beep(355, 11, 3);         /* tone(10,0,2) */
-    beep(355, 11, 4);         /* tone(10,0,3) */
-    beep(355, 11, 0);         /* tone(10,0,0) */
+    beep(355, 20, 1);         /* tone(10,0,1) */
+    beep(355, 20, 3);         /* tone(10,0,2) */
+    beep(355, 20, 4);         /* tone(10,0,3) */
+    beep(355, 20, 0);         /* tone(10,0,0) */
 }
 
 void soundScore()
