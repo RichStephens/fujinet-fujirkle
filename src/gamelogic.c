@@ -180,11 +180,23 @@ static uint8_t promptHold;
 static uint8_t turnHold;
 static int16_t heldTurn;
 
-// The server clears KeptDice as it banks, so the full set never reaches the
-// client - only our own turn can be rebuilt, from the confirmed dice plus the
-// selection we banked with.
 static char    heldKept[NUM_DICE + 1];
 static bool    heldKeptReady;
+
+// The server wipes the kept dice as it banks, so the full set has to be built
+// here: what was already set aside, plus what the mask takes from the pool.
+static void composeHeldKept(char *base, char *dice, char *mask) {
+  static unsigned char hn, hi;
+
+  strcpy(heldKept, base);
+  hn = (unsigned char)strlen(heldKept);
+
+  for (hi = 0; dice[hi] && hn < NUM_DICE; hi++)
+    if (mask[hi] == '1')
+      heldKept[hn++] = dice[hi];
+
+  heldKept[hn] = 0;
+}
 static bool    heldKeptShow;
 static int8_t  bankedWho;
 
@@ -424,13 +436,13 @@ static void drawTurnPanel() {
   thalf = WIDTH / 2;
 
   // While the finished turn is held, the dice that earned it
-  tkept = (turnHold && heldKeptShow) ? heldKept : game.keptDice;
+  tkept = heldKeptShow ? heldKept : game.keptDice;
   tn = (unsigned char)strlen(tkept);
 
   drawText(thalf + 2, BOARD_TOP + 1, "kept");
 
-  // All six can be set aside before hot dice clears them, so they get two rows
-  // of three. Each die is three cells tall, hence the +3 between rows.
+  // Banking the last of the pool leaves all six set aside, so two rows of three.
+  // Each die is three cells tall, hence the +3 between rows.
   for (ti = 0; ti < NUM_DICE; ti++) {
     tx = thalf + 2 + (ti % KEPT_PER_ROW) * DIE_STEP;
     ty = BOARD_TOP + 2 + (ti / KEPT_PER_ROW) * 3;
@@ -838,8 +850,18 @@ void processStateChange() {
 
     // Hot dice: a full pool with points held and nothing set aside, which
     // cannot happen at the start of a turn
-    if (TURN_SCORE_OF(game) > 0 && strlen(game.dice) == NUM_DICE && game.keptDice[0] == 0)
+    if (TURN_SCORE_OF(game) > 0 && strlen(game.dice) == NUM_DICE && game.keptDice[0] == 0) {
       pendHotDice = true;
+
+      if (game.activePlayer == 0)
+        heldKeptShow = heldKeptReady;
+      else {
+        composeHeldKept(state.prevKept, diceBefore, game.keepRoll);
+        heldKeptShow = true;
+      }
+      heldKeptReady = false;
+      prevTurnScore = -1;
+    }
   }
 
   // Rolled nothing that scores: still the active player, but no move allowed
@@ -872,8 +894,7 @@ void processStateChange() {
       turnHold = TURN_HOLD_TICKS;
       turnHoldStart = getTime();
 
-      // Somebody else banking. Starting a turn clears keepRoll, so the dice they
-      // set aside never reach us - only the press and the pause can be shown.
+      // No mask on the wire, so the strip has only the press to show
       if (bankedWho > 0 && !botShowHold) {
         strcpy(botDice, diceBefore);
         botMask[0] = 0;
@@ -883,9 +904,12 @@ void processStateChange() {
         diceDirty = true;
       }
 
-      // Only our own dice, and only for the bank we recorded - otherwise the
-      // box shows our last hand beside a bot's total
-      heldKeptShow = (bankedWho == 0) && heldKeptReady;
+      if (bankedWho == 0)
+        heldKeptShow = heldKeptReady;
+      else {
+        composeHeldKept(state.prevKept, diceBefore, game.keepRoll);
+        heldKeptShow = true;
+      }
       heldKeptReady = false;
 
       // Banking on a turn's first roll leaves turn score and kept dice reading
@@ -972,10 +996,17 @@ static void tickHolds() {
     centerTextWide(PROMPT_Y, game.prompt);
   }
 
+  // Only stands while a hold covers it, or it rides into later polls showing
+  // dice that are no longer set aside
+  if (heldKeptShow && !turnHold && !promptHold && !botShowHold) {
+    heldKeptShow = false;
+    prevTurnScore = -1;
+    drawTurnPanel();
+  }
+
   // Clearing the turn box and landing the points in the total happen on the
   // same frame - that pairing is what sells the move
   if (turnHold && holdElapsed(&turnHold, turnHoldStart, TURN_HOLD_TICKS)) {
-    heldKeptShow = false;
     prevTurnScore = -1;
     // The points landing may be what starts the final round
     prevFinal = -1;
@@ -1054,10 +1085,11 @@ void handleAnimation() {
         prevPrompt[0] = 0;
         maybePlayMyTurnSound();
         showPendingPrompt();
-      } else if (turnPrompt[0]) {
+      } else if (turnPrompt[0] && !(game.status & STATUS_FUJIRKLE)) {
         // Same player rolls on, so their name goes back before the next tumble.
-        // prevPrompt takes the banner rather than what is drawn, marking it spent
-        // so no later poll can raise it again.
+        // prevPrompt takes the banner, marking it spent so no later poll raises
+        // it again. Never over a fujirkle - that one belongs to the roll on
+        // screen.
         strcpy(prevPrompt, game.prompt);
         centerTextWide(PROMPT_Y, turnPrompt);
         promptHold = 0;
@@ -1123,7 +1155,7 @@ void handleAnimation() {
 // The mask must be exactly as long as the pool still in play - applyKeepMask
 // rejects any other length outright, silently.
 static bool sendSelection(bool bank) {
-  static unsigned char pool, mi, kn;
+  static unsigned char pool, mi;
 
   pool = (unsigned char)strlen(game.dice);
 
@@ -1139,18 +1171,8 @@ static bool sendSelection(bool bank) {
     tempBuffer[5 + mi] = selMask[mi];
   tempBuffer[5 + pool] = 0;
 
-  // The server wipes the kept dice as it banks, so record the complete set now
-  if (bank) {
-    strcpy(heldKept, game.keptDice);
-    kn = (unsigned char)strlen(heldKept);
-
-    for (mi = 0; mi < pool && kn < NUM_DICE; mi++)
-      if (selMask[mi] == '1')
-        heldKept[kn++] = game.dice[mi];
-
-    heldKept[kn] = 0;
-    heldKeptReady = true;
-  }
+  composeHeldKept(game.keptDice, game.dice, selMask);
+  heldKeptReady = true;
 
   soundRollButton();
   hideCursor();
