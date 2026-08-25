@@ -1,0 +1,6 @@
+# Build outputs from `make` in this directory (see Makefile).
+fujirkle.asm
+fujirkle.bin
+fujirkle.cfg
+fujirkle.rom
+fujirkle.lst
