@@ -140,11 +140,10 @@ void showHelpScreen() {
   hy++;
   helpLn(2, "straight 1-6 - 1500");
   helpLn(2, "three pairs  - 1500");
-  hy++;
-  helpLn(2, "three pairs = 3 DIFFERENT");
+  helpLn(2, "three pairs: 3 DIFFERENT");
   helpLn(2, "PAIRS. four AND A pair");
   helpLn(2, "IS NOT.");
-  helpLn(2, "OUT OF time? BEST DICE");
+  helpLn(2, "OUT OF time - BEST DICE");
   helpLn(2, "ARE banked FOR YOU.");
   #else
   hy=3;centerTextAlt(hy, "single dice");
